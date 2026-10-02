@@ -2,6 +2,7 @@ streamlit>=1.56
 pandas
 altair
 pymupdf
+python-docx
 python-dotenv
 snowflake-connector-python
 cryptography

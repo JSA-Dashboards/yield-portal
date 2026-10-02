@@ -5,8 +5,9 @@ PDFs and the report emails, with entry and review screens.
 Run locally:  streamlit run streamlit_app.py
 
 Access, as in the River FOB portal:
-  - ?view=1 is the read-only share link: Explore only, no downloads, no
-    password. Add reports, Review & edit and Import PDF don't exist there.
+  - ?view=1 is the read-only share link: Explore and Report text, no
+    downloads, no password. Add reports, Review & edit and Import PDF don't
+    exist there.
   - Everything else sits behind EDIT_PASSWORD.
   - With no EDIT_PASSWORD set (local dev) the app is open.
 """
@@ -75,7 +76,8 @@ if not VIEW_ONLY:
 db.init_db()
 
 pages = [st.Page("app_pages/explore.py", title="Explore", icon=":material/insights:",
-                 default=True)]
+                 default=True),
+         st.Page("app_pages/report_text.py", title="Report text", icon=":material/article:")]
 if not VIEW_ONLY:                       # the internal pages never exist on the view link
     pages += [
         st.Page("app_pages/add.py", title="Add reports", icon=":material/add_circle:"),
