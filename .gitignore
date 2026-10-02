@@ -1,0 +1,12 @@
+.env
+.streamlit/secrets.toml
+*.p8
+yield_portal.db
+yield_observations.csv
+yield_observations.json
+__pycache__/
+*.pyc
+
+# real report text: kept on the desk only (the repo is public)
+tests/*_local.py
+CLAUDE.local.md
