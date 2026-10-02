@@ -105,7 +105,9 @@ PUBLIC; SELECT/INSERT/UPDATE/DELETE on the table; CREATE TABLE on the schema for
 the temp staging table imports use) — `snowflake/service_user.sql`. Secrets:
 `USE_SNOWFLAKE`, `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_ROLE`,
 `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_PRIVATE_KEY` (PEM in `"""…"""`),
-`EDIT_PASSWORD`. Never set `SNOWFLAKE_DATABASE`/`_SCHEMA`.
+`EDIT_PASSWORD`. Never set `SNOWFLAKE_DATABASE`/`_SCHEMA`. After changing
+Secrets, **Reboot** the app: the secrets→env bridge in `streamlit_app.py` never
+overwrites a variable that's already set, so a running app keeps the old value.
 Prove the login path with `python snowflake/verify_service.py` (no browser,
 never prints key content).
 
