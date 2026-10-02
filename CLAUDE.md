@@ -94,8 +94,8 @@ Streamlit Community Cloud from this repo (branch `master`, `streamlit_app.py`).
 The repo was created directly in the org — a transferred repo's webhook
 silently stops deploying. The app is **public** on Community Cloud (one private app per workspace), so
 access works like the River FOB portal: `?view=1` is the password-free
-read-only share link — Explore only, no downloads, and Add reports / Review &
-edit / Import PDF aren't even registered there ("those are just for us").
+read-only share link — Explore and Report text, no downloads, and Add reports /
+Review & edit / Import PDF aren't even registered there ("those are just for us").
 Everything else needs `EDIT_PASSWORD`. On the view link a database error shows
 a plain message, never connection details.
 
@@ -116,6 +116,21 @@ never prints key content).
 `streamlit run streamlit_app.py` from **inside this folder** — Streamlit reads
 `.streamlit/` from the CWD, so a parent folder's `secrets.toml` would leak in.
 With no passwords set (local) the app is open.
+
+## Report text
+
+**Report text** (`app_pages/report_text.py`, logic in `report_text.py`) lays the
+reports out the way the annual PDF does — crop, state, then each report in its own
+words with its report date — from the same `raw_text` (nothing extra is stored).
+Within a state: the PDF's order (report date, undated after by place) or by place.
+Word (python-docx) and PDF (PyMuPDF's Story HTML layout) downloads are built on
+click from what's on screen, and are hidden on the view link like the CSV.
+
+Report text is free text, so it is escaped for Markdown (`~10%` would strike
+through, `$395 … $255` would turn into math) and for HTML. Each state is a
+Markdown table, not `st.table`: `st.table` caps a Markdown cell at 400px, which
+squeezes paragraphs into a narrow column. Run `python tests/test_report_text.py`
+after changes.
 
 ## Charts
 
