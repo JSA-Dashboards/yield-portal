@@ -144,6 +144,12 @@ def sf_connect(database=SF_DATABASE, schema=SF_SCHEMA):
             kw["database"] = database
         if schema:
             kw["schema"] = schema
+        # The Analytics profile has no default warehouse (COMPUTE_WH is no one's
+        # default), so honor an explicit SNOWFLAKE_WAREHOUSE on the profile path too
+        # — otherwise every query fails with "No active warehouse selected".
+        wh = os.environ.get("SNOWFLAKE_WAREHOUSE")
+        if wh:
+            kw["warehouse"] = wh
         conn = sc.connect(**kw)
         try:
             conn._paramstyle = "pyformat"
