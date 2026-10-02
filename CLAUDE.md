@@ -94,8 +94,8 @@ Streamlit Community Cloud from this repo (branch `master`, `streamlit_app.py`).
 The repo was created directly in the org — a transferred repo's webhook
 silently stops deploying. The app is **public** on Community Cloud (one private
 app per workspace), so access is by password: `EDIT_PASSWORD` (everything) and
-`VIEW_PASSWORD` (read-only Explore, no downloads); `?view=1` forces read-only
-but still needs a password.
+`VIEW_PASSWORD` (read-only Explore, no downloads; optional — without it one
+password opens everything); `?view=1` forces read-only but still needs a password.
 
 The app logs in as a **service user** with key-pair auth: `YIELD_PORTAL_SVC`
 (TYPE=SERVICE) with `YIELD_PORTAL_ROLE` (usage on the warehouse / YIELD_REPORTS /
