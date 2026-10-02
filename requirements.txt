@@ -1,0 +1,7 @@
+streamlit>=1.56
+pandas
+altair
+pymupdf
+python-dotenv
+snowflake-connector-python
+cryptography

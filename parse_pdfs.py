@@ -1,0 +1,737 @@
+"""
+Parse the annual Ag Trader Talk yield PDFs into structured observation rows.
+
+Two layouts are handled:
+  * "Template" years (2025, 2026): Crop header -> State header -> one line per
+    observation, e.g. "Adams Co, IN: 105-110 day corn ... 248 bpa, 18.6% moisture".
+  * "Yields" years (2023, 2024): Crop header -> flat list, state carried in the
+    location token of each line ("Centerville, IA (SE IA) - ...").
+
+Nothing is thrown away: the full observation text is kept in `raw_text`. The
+structured columns (yield, moisture, acres, APH, maturity) are best-effort regex
+pulls over that text and may be null when the wording doesn't expose them.
+
+Output: yield_observations.csv + .json in this folder, plus a stats summary.
+"""
+import fitz  # pymupdf
+import re
+import os
+import csv
+import json
+import hashlib
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DL = r"C:\Users\KoltenPostin\Downloads"
+
+# crop_year is the harvest year; file -> year
+FILES = {
+    "2023 Yields.pdf": 2023,
+    "2024 Yields.pdf": 2024,
+    "2025 Yield Template.pdf": 2025,
+    "2026 Yield Template 9.28.26.pdf": 2026,
+}
+
+STATE_ABBR = {
+    "ALABAMA": "AL", "ARKANSAS": "AR", "GEORGIA": "GA", "ILLINOIS": "IL",
+    "INDIANA": "IN", "IOWA": "IA", "KANSAS": "KS", "KENTUCKY": "KY",
+    "LOUISIANA": "LA", "MICHIGAN": "MI", "MINNESOTA": "MN", "MISSISSIPPI": "MS",
+    "MISSOURI": "MO", "NEBRASKA": "NE", "NORTH DAKOTA": "ND", "OHIO": "OH",
+    "OKLAHOMA": "OK", "SOUTH DAKOTA": "SD", "TENNESSEE": "TN", "TEXAS": "TX",
+    "WISCONSIN": "WI", "NORTH CAROLINA": "NC", "SOUTH CAROLINA": "SC",
+}
+ABBRS = set(STATE_ABBR.values())
+# full-state-name header line (exact), case-insensitive
+STATE_HDR_RE = re.compile(
+    r"^(%s)\s*$" % "|".join(sorted(STATE_ABBR, key=len, reverse=True)),
+    re.IGNORECASE)
+
+CROP_HDR_RE = re.compile(
+    r"^(corn|soybeans?|beans|wheat|milo|sorghum|silage)\s*:?\s*$", re.IGNORECASE)
+
+
+def norm_crop(s):
+    s = s.lower().rstrip(":").strip()
+    if s in ("beans", "soybean", "soybeans"):
+        return "Soybeans"
+    return s.capitalize()
+
+
+# Separators that close a location prefix: colon, hyphen, en/em dash, open paren.
+_SEP = r"[:\-–—(]"
+# "<place/county>, ST:"  or  "<place> ST –"   (ST = 2-letter abbrev)
+NEW_OBS_RE = re.compile(
+    r"^([A-Z][\w.&'/, ]{0,44}?)[, ]+(%s)\b\s*%s" % ("|".join(ABBRS), _SEP))
+# "<Name> Co/County <FullStateName>"  e.g. "Monona County Iowa Silage Appraisals".
+# The county word is required so a sentence that merely names a state
+# ("Common story for Indiana, ...") is not taken as a new observation.
+_FULL = "|".join(sorted(STATE_ABBR, key=len, reverse=True))
+FULLNAME_RE = re.compile(
+    r"^([A-Z][\w'&/ ]{0,30}?\s(?:Co\.?|County|Parish))[, ]+(%s)\b" % _FULL,
+    re.IGNORECASE)
+# Mixed-case abbreviation after a county word: "Howard Co Ia - near the Mn line".
+_TITLE = {ab.title(): ab for ab in ABBRS}
+TITLE_CO_RE = re.compile(
+    r"^([A-Z][\w.' ]{0,30}?\s(?:Co\.?|County))[, ]+(%s)\b" % "|".join(_TITLE))
+# No separator after the state (common in 2023): "Shelby Co IL 280 acres",
+# "Tuscola IL 22 acres". The place must be 1-2 capitalised words (+ optional county
+# word) so "Great IL crop"-style sentences rarely qualify.
+LOOSE_RE = re.compile(
+    r"^([A-Z][a-z.']+(?:\s+[A-Z][a-z.']+)?(?:\s+(?:Co\.?|County|Parish))?)\s+(%s)\b"
+    % "|".join(ABBRS))
+# Regional block led by the state itself: "AR Delta:", "MS yields –", "AR –".
+LEAD_STATE_RE = re.compile(
+    r"^(%s)\b\s*([A-Za-z ]*?)\s*%s" % ("|".join(ABBRS), _SEP))
+
+
+def parse_location(line):
+    """Return (location, state_abbr). location may be None for a regional block
+    led by the state; state is None when the line starts no observation."""
+    m = LEAD_STATE_RE.match(line)
+    if m:
+        return (m.group(2).strip() or None), m.group(1)
+    m = NEW_OBS_RE.match(line)
+    if m:
+        return m.group(1).strip().rstrip(",-– "), m.group(2)
+    m = FULLNAME_RE.match(line)
+    if m:
+        return m.group(1).strip(), STATE_ABBR[m.group(2).upper()]
+    m = TITLE_CO_RE.match(line)
+    if m:
+        return m.group(1).strip(), _TITLE[m.group(2)]
+    m = LOOSE_RE.match(line)
+    if m:
+        return m.group(1).strip(), m.group(2)
+    return None, None
+
+
+def is_continuation(line):
+    """True when a line clearly belongs to the previous observation rather than
+    starting a new one: lowercase start, a leading number (sub-bullet yields),
+    or bullet markers."""
+    if not line:
+        return True
+    c = line[0]
+    if c.islower() or c.isdigit():
+        return True
+    if c in "•-–—*":
+        return True
+    return False
+
+
+# --- metric extraction over raw text ---------------------------------------
+# A yield is a number followed by a yield unit; an optional "lo-" / "lo to"
+# prefix captures ranges ("225-230 bpa"). "230 dry" means 230 bu dry.
+YIELD_RE = re.compile(
+    r"(?:(\d{2,3})\s*(?:-|–|to)\s*)?(\d{2,3}(?:\.\d+)?)\+?\s*-?\s*"   # "80+ bpa", "214-BPA"
+    r"(?:bpa|bu(?:shels?)?(?:\s*/\s*ac(?:re)?|\s+per\s+acre)?|dry)\b",
+    re.IGNORECASE)
+# Context classifiers. A line usually mixes this year's yield with last year's,
+# the expectation, and differences ("down 12 bu", "20 bpa less than APH");
+# only the first kind is the observation's yield.
+_PRE_DELTA = re.compile(   # "down 12 bu", "better than expected by about 10 bu"
+    r"\b(down|up|off|by|plus|minus)(?:\s+(?:about|around|roughly|approximately|"
+    r"nearly|almost|just|over))?\s*$", re.I)
+_POST_DELTA = re.compile(
+    r"^\s*(?:\w+\s+){0,2}?(better|less|more|worse|over|under|higher|lower|"
+    r"above|below|short|off)\b", re.I)
+# [^\w.] — never look across a full stop: in "228 dry. 12 off last year" the
+# "last year" belongs to the next sentence, not to 230.
+# Intervening words must be plain words — not numbers ("68 bpa vs 73 last year":
+# the "last year" is 76's) and not comparisons ("241 bpa, above last year": 238
+# is this year's, compared to last year).
+_COMPARE = (r"above|below|better|worse|over|under|than|higher|lower|compared|vs|"
+            r"versus|from|off|up|down|same|as|like|similar|to|of")
+_LY_POST = re.compile(
+    r"^[^\w.]{0,3}(?:(?!(?:%s)\b)[A-Za-z]+\s+){0,2}?(last year|ly\b|a year ago|"
+    r"year ago|prior year|in 20\d\d|last yr)" % _COMPARE, re.I)
+# "vs 76 last year" / "vs 62 ly" / "vs. 55bpa last year" -> last-year yield
+LY_VS_RE = re.compile(
+    r"\bvs\.?\s+(\d{2,3}(?:\.\d+)?)\s*(?:bpa|bu\w*(?:/ac\w*)?)?\s*"
+    r"(?:last year|ly\b|a year ago|in 20\d\d)", re.I)
+_LY_WORDS = re.compile(r"last year|\bly\b|last yr|a year ago|prior year", re.I)
+_COMPARE_BEFORE = re.compile(
+    r"(?:than|vs\.?|versus|from|over|under|above|below|as|to|like|"
+    r"compared(?:\s+(?:to|with))?)\s*$", re.I)
+
+
+def _ly_before(before):
+    """True when the text just before a yield puts that yield in last year:
+    "LY 225", "last year was 260", "Last year the county average was 211.69".
+    A comparison ("better than last year, made 245") does not count."""
+    sent = re.split(r"[.;]\s", before)[-1]          # stay inside the sentence
+    hits = list(_LY_WORDS.finditer(sent))
+    if not hits:
+        return False
+    m = hits[-1]
+    if _COMPARE_BEFORE.search(sent[:m.start()]):
+        return False
+    gap = len(sent) - m.end()
+    opens_sentence = not sent[:m.start()].strip()
+    return gap <= 25 or (opens_sentence and gap <= 55)
+
+
+# "250 LY", "225 bpa LY" — a bare last-year figure, used when nothing else gave one
+LY_TAIL_RE = re.compile(
+    r"(?<![\d.])(\d{2,3}(?:\.\d+)?)\s*(?:bpa|bu(?:/ac\w*)?)?\s*(?:\bLY\b|last year|a year ago)",
+    re.I)
+# "240 bu/ac expected" is the expectation; but in "yield 52 bpa expected 215bpa"
+# the expectation is the NEXT number, so 47 stays the actual.
+# \b pins the whole word; without it \w* backtracks to "expect" and the
+# lookahead then sees "ed 220bpa" and wrongly passes.
+# Likewise "went 54.5 bpa, expected 42": a figure after "expected" is the
+# expectation. A percentage there ("240 bu/ac expected – 100% irrigated") isn't;
+# (?!\d) stops \d{2,3} backtracking to "10" of "100%", and (?!\.\d) — not
+# (?![\d.]) — still lets "expected 40." end a sentence.
+_EXP_POST = re.compile(
+    r"^\W{0,3}(expect\w*|estimat\w*)\b"
+    r"(?!\W{0,3}\d{2,3}(?:\.\d+)?(?!\d)(?!\.\d)(?!\s*%))", re.I)
+_EXP_PRE = re.compile(r"(expect\w*|hop\w* (?:for|to))\W{0,10}$", re.I)
+# "less/more than" marks a difference at any size ("40 to 60 bushel less than
+# last year"), unlike "better than", which also follows real yields.
+_LESS_MORE = re.compile(r"^\s*(?:\w+\s+)?(less|more|fewer)\s+than\b", re.I)
+_APH_PRE = re.compile(r"aph\W{0,8}$", re.I)
+
+
+# What must NOT follow a bare yield number: moisture/acres/maturity/test-weight
+# units, a unit we already parse (handled by YIELD_RE), or the start of a range
+# like "20-22%" (which would otherwise read as 20).
+_NOT_YIELD_TAIL = (    # (?!\.\d) not (?![\d.]): "corn avg 238." ends a sentence
+    r"(?!\d)(?!\.\d)(?!\s*(?:%|acres?\b|ac\b|a\b|-?day|#|lbs?\b|tw\b|test|mst|moist|"
+    r"degree|tons?\b|bu|bpa|ft\b|inch)|\s*(?:-|–|to)\s*\d)")
+# Unit-less yields after a harvest verb: "went 287", "running 240-280",
+# "LY was 259", "in the 190 range". Only consulted when no unit-bearing current
+# yield was found.
+BARE_YIELD_RE = re.compile(
+    r"\b(?:went|made|averag(?:ed|ing)|avg|yielded|came in at|running|ran|did|"
+    r"making|was|yields?(?:\s+of)?|in the)\s+"
+    r"(?:about\s+|around\s+|right at\s+|roughly\s+)?"
+    r"(\d{2,3}(?:\.\d+)?)(?:\s*(?:-|–|to)\s*(\d{2,3}(?:\.\d+)?))?" + _NOT_YIELD_TAIL,
+    re.I)
+POST_AVG_RE = re.compile(r"(?<![\d.])(\d{2,3}(?:\.\d+)?)\s+(?:avg|average)\b", re.I)
+# A bare expectation: "went 54.5 bpa, expected 42."
+EXP_NUM_RE = re.compile(
+    r"\bexpect(?:ed|ing|ation)?\s+(?:about\s+|around\s+)?(\d{2,3}(?:\.\d+)?)"
+    r"(?!\d)(?!\.\d)(?!\s*%)", re.I)
+# Location then a bare figure, nothing between: "Mitchell Co IA 248" (emailed lists).
+LEAD_NUMBER_RE = re.compile(
+    r"^[^:\d]{2,60}?\b(?:%s)\b[\s:,\-]+(\d{2,3}(?:\.\d+)?)%s" % ("|".join(ABBRS), _NOT_YIELD_TAIL))
+# Unit BEFORE the number — the seed-plot format in 2025: "Avg bpa 259.8".
+PRE_UNIT_RE = re.compile(
+    r"\b(?:bpa|bu/ac(?:re)?)\s*[:=]?\s*(\d{2,3}(?:\.\d+)?)" + _NOT_YIELD_TAIL, re.I)
+
+
+def _classify(text, start, end, val, cur, ly, exp, lo=None):
+    before = text[max(0, start - 30): start]
+    after = text[end: end + 30]
+    long_before = text[max(0, start - 80): start]
+    # a small number with a comparison word after it is a difference,
+    # not a yield ("10 bpa better than LY"); "245 bpa, better than APH" is a yield
+    if (_PRE_DELTA.search(before) or (val < 45 and _POST_DELTA.match(after))
+            or _LESS_MORE.match(after)):
+        return
+    if _APH_PRE.search(before):
+        return
+    if _LY_POST.match(after) or _ly_before(long_before):
+        ly.append(val)
+        return
+    if _EXP_POST.match(after) or _EXP_PRE.search(before):
+        exp.append(val)
+        return
+    if not (10 <= val <= 400):
+        return
+    if lo is not None and 10 <= lo <= 400:
+        cur.append(lo)
+    cur.append(val)
+
+
+def extract_yields(text):
+    """-> (current, last_year, expected) lists of bu/ac values."""
+    cur, ly, exp = [], [], []
+    for m in YIELD_RE.finditer(text):
+        lo = float(m.group(1)) if m.group(1) else None
+        _classify(text, m.start(), m.end(), float(m.group(2)), cur, ly, exp, lo)
+    for m in PRE_UNIT_RE.finditer(text):
+        _classify(text, m.start(), m.end(), float(m.group(1)), cur, ly, exp)
+    if not ly:
+        m = LY_VS_RE.search(text)
+        if m:
+            ly.append(float(m.group(1)))
+    if not ly:
+        for m in LY_TAIL_RE.finditer(text):
+            if not _PRE_DELTA.search(text[max(0, m.start() - 12): m.start()]):
+                ly.append(float(m.group(1)))
+                break
+    if not cur:
+        for m in BARE_YIELD_RE.finditer(text):
+            # a bare range "240-280" is lo=group1, hi=group2
+            v1 = float(m.group(1))
+            v2 = float(m.group(2)) if m.group(2) else None
+            if v2 is not None:
+                _classify(text, m.start(), m.end(), v2, cur, ly, exp, lo=v1)
+            else:
+                _classify(text, m.start(), m.end(), v1, cur, ly, exp)
+    if not cur:
+        # a bare figure right after the location: "Mitchell Co IA 248"
+        m = LEAD_NUMBER_RE.match(text)
+        if m:
+            _classify(text, m.start(1), m.end(1), float(m.group(1)), cur, ly, exp)
+    if not cur:
+        # the average named after the figure: "1/2 done on corn w 236 avg so far"
+        for m in POST_AVG_RE.finditer(text):
+            _classify(text, m.start(1), m.end(1), float(m.group(1)), cur, ly, exp)
+    if not exp:
+        m = EXP_NUM_RE.search(text)
+        if m:
+            exp.append(float(m.group(1)))
+    return cur, ly, exp
+
+
+# APH: "APH 210", "APH of 250", "Aph on field is 235ish", "APH was 47 bpa",
+# "(205 APH)", "vs 180 aph". [^\d.] stops at a full stop, so in "better than
+# APH. Different producer making 240 bpa vs APH 220" the first APH (no value)
+# can't grab 240 — the second one gives 220.
+APH_RE = re.compile(
+    r"\baph\b[^\d.]{0,14}?(\d{2,3})|(\d{2,3})\s*aph\b", re.IGNORECASE)
+
+# Maturity, read the way each crop reports it, kept as text so ranges survive:
+#   corn  -> relative maturity days: "110 day", "108-112 day", "95-day", "106 Mat"
+#   beans -> maturity group: "2.6 maturity", ".6 maturity", "1.2, 1.3's", "1.0 beans"
+CORN_RM_RE = re.compile(
+    r"\b(\d{2,3})(?:\s*[-–]\s*(\d{2,3}))?\s*[- ]?(?:days?|mat)\b", re.IGNORECASE)
+SOY_MG_RE = re.compile(
+    r"(?<![\d.])(\d?\.\d)(?:\s*[-–,]\s*(\d?\.\d))?\s*"
+    r"(?:maturity|mg\b|['’]s\b|(?:soy)?beans\b)", re.IGNORECASE)
+
+
+def extract_maturity(text, crop):
+    if crop == "Soybeans":
+        for m in SOY_MG_RE.finditer(text):
+            lo, hi = m.group(1), m.group(2)
+            lo = "0" + lo if lo.startswith(".") else lo
+            hi = ("0" + hi if hi.startswith(".") else hi) if hi else None
+            if 0 <= float(lo) <= 6.5:
+                return f"{lo}-{hi}" if hi else lo
+        return None
+    for m in CORN_RM_RE.finditer(text):       # "within 10 days" etc. fail the range check
+        lo, hi = m.group(1), m.group(2)
+        if 70 <= int(lo) <= 125 and (not hi or 70 <= int(hi) <= 125):
+            return f"{lo}-{hi}" if hi else lo
+    return None
+
+
+# Irrigation as stated in the report. "irrigated yields" is a figure of speech
+# ("irrigated yields on dry ground"), not a statement about the field;
+# \b after \w* stops backtracking from slipping past that lookahead.
+_NONIRR_RE = re.compile(r"dry\s?land|non[- ]?irrigat\w*|not irrigat\w*|rain[- ]?fed", re.I)
+_IRR_RE = re.compile(
+    r"(?<!non-)(?<!non )(?<!not )\birrigat\w*\b(?!\s+yields)"
+    r"|under (?:a |the )?pivot|\bpivots?\b", re.I)
+
+
+def extract_irrigation(text):
+    """'Irrigated' | 'Non-irrigated' | 'Mixed' (both named) | None (not stated)."""
+    irr, non = bool(_IRR_RE.search(text)), bool(_NONIRR_RE.search(text))
+    if irr and non:
+        return "Mixed"
+    return "Irrigated" if irr else "Non-irrigated" if non else None
+
+
+# Disease and damage named in the report, one normalised tag each. Weather damage
+# (hail, wind, drought...) sits alongside disease because the reports use both
+# the same way: to say what took yield.
+DISEASE_TAGS = [
+    ("Tar spot", r"tar\s?spot"),
+    ("Crown/root rot", r"crown\s+(?:root\s+)?rot|root\s+rot"),
+    ("Stalk rot/quality", r"stalk\s+(?:rot|quality|issues?)"),
+    ("Ear rot/mold", r"ear\s+(?:rot|mold)"),
+    ("Rust", r"\brust\b"),
+    ("Gray leaf spot", r"gr[ae]y\s+leaf\s+spot|\bgls\b"),
+    ("Leaf blight", r"leaf\s+blight|\bnclb\b"),
+    ("White spot", r"white\s+spot"),
+    ("SDS", r"sudden\s+death|\bsds\b"),
+    ("White mold", r"white\s+mold"),
+    ("Frogeye", r"frog\s?eye"),
+    ("Disease (general)", r"\bdisease"),
+    ("Insects", r"aphids?|insects?|rootworm|corn\s+borer|japanese\s+beetle|stink\s+bugs?"),
+    ("Pollination", r"pollinat"),
+    ("Hail", r"\bhail"),
+    ("Wind/lodging", r"wind[- ]?damage\w*|green\s?snap|lodg\w*|downed|"
+                     r"(?:fall(?:ing)?|fell)\s+over|blown\s+(?:down|over)"),
+    ("Drought/dry", r"drought|dryness|no rain|lack of rain|never (?:could )?get a rain|"
+                    r"(?:very|terribly|extremely|too|pretty|really|severe(?:ly)?|so)\s+dry\b|"
+                    r"dry\s+(?:july|august|june|september|season|finish|spell|weather|"
+                    r"conditions|stretch|year)|missed (?:the )?rains?|zero rain|little rain|"
+                    r"didn.t get (?:much )?rain"),
+    ("Excess water", r"too wet|flood|drown|water\s?holes?|standing water|"
+                     r"excess(?:ive)? (?:rain|moisture)|nitrogen loss"),
+    ("Heat stress", r"heat stress|\b1[01]\d\s?f\b|extreme heat|above normal heat|"
+                    r"(?:rain|dryness|dry) and heat|heat and (?:dry|drought)|"
+                    r"heat in (?:july|august)"),
+    ("Frost", r"\bfrost|\bfreez"),
+]
+_DISEASE_RES = [(tag, re.compile(rx, re.I)) for tag, rx in DISEASE_TAGS]
+_SPECIFIC_DISEASES = {t for t, _ in DISEASE_TAGS[:11]}
+
+
+def extract_disease(text):
+    """Comma-joined tags in DISEASE_TAGS order, or None. 'Disease (general)' is
+    only kept when no specific disease was named."""
+    tags = [tag for tag, rx in _DISEASE_RES if rx.search(text)]
+    if "Disease (general)" in tags and _SPECIFIC_DISEASES.intersection(tags):
+        tags.remove("Disease (general)")
+    return ", ".join(tags) or None
+
+
+def _first(rx, text, groups=1):
+    m = rx.search(text)
+    if not m:
+        return None
+    for g in range(1, groups + 1):
+        if m.group(g):
+            try:
+                return float(m.group(g).replace(",", ""))
+            except ValueError:
+                return m.group(g)
+    return None
+
+
+def extract_metrics(text, crop):
+    cur, ly, exp = extract_yields(text)
+    aph = _first(APH_RE, text, 2)
+    if isinstance(aph, float) and not (20 <= aph <= 350):
+        aph = None
+    return {
+        "yield_bpa": cur[0] if cur else None,
+        "yield_min": min(cur) if cur else None,
+        "yield_max": max(cur) if cur else None,
+        "n_yields": len(cur),
+        "ly_yield": ly[0] if ly else None,
+        "expected_yield": exp[0] if exp else None,
+        "aph": aph,
+        "maturity": extract_maturity(text, crop),
+        "irrigation": extract_irrigation(text),
+        "disease": extract_disease(text),
+        "is_silage": "silage" in text.lower(),
+        "is_record": bool(re.search(r"\brecord\b|best ever|best .* ever|all[- ]time",
+                                    text, re.IGNORECASE)),
+    }
+
+
+def dedup_hash(crop_year, crop, state, location, raw):
+    """Stable row identity: same year/crop/state/location/text -> same hash,
+    regardless of case or how the PDF wrapped the line."""
+    text = re.sub(r"\s+", " ", raw.lower()).strip()
+    key = f"{crop_year}|{crop}|{state}|{location}|{text}"
+    return hashlib.sha1(key.encode()).hexdigest()[:16]
+
+
+_ZERO_WIDTH = re.compile(r"[\u200b\u200c\u200d\ufeff]")   # email preview padding
+
+
+def _clean_lines(raw_lines):
+    out = []
+    for ln in raw_lines:
+        ln = _ZERO_WIDTH.sub("", ln.replace("\u202f", " ").replace("\xa0", " "))
+        ln = re.sub(r"[ \t]{2,}", " ", ln).strip()
+        if ln:
+            out.append(ln)
+    return out
+
+
+def parse_pdf(src, crop_year, source_file=None):
+    """src: a file path, or the PDF's bytes (e.g. a Streamlit upload)."""
+    if isinstance(src, (bytes, bytearray)):
+        doc = fitz.open(stream=bytes(src), filetype="pdf")
+        name = source_file or "upload.pdf"
+    else:
+        doc = fitz.open(src)
+        name = source_file or os.path.basename(src)
+    try:
+        raw = [ln for pg in doc for ln in pg.get_text().splitlines()]
+    finally:
+        doc.close()
+    return parse_lines(_clean_lines(raw), crop_year, source_file=name)
+
+
+def parse_lines(lines, crop_year, default_crop=None, source_file=None,
+                report_source="pdf"):
+    """Run the observation state machine over cleaned text lines: crop and
+    state headers set context, a line opening with a location starts a row,
+    anything else continues the current row."""
+    obs = []
+    crop = default_crop
+    state_hdr = None
+    cur = None
+
+    def flush():
+        nonlocal cur
+        if cur:
+            obs.append(cur)
+            cur = None
+
+    for ln in lines:
+        if CROP_HDR_RE.match(ln):
+            flush()
+            crop = norm_crop(ln)
+            state_hdr = None
+            continue
+        if STATE_HDR_RE.match(ln):
+            flush()
+            state_hdr = STATE_ABBR[ln.upper()]
+            continue
+        loc, st = parse_location(ln)
+        starts_new = st is not None and not is_continuation(ln)
+        if starts_new:
+            flush()
+            cur = {
+                "crop_year": crop_year,
+                "crop": crop or "Unknown",
+                "state": st or state_hdr,
+                "location": loc,
+                "raw_text": ln,
+            }
+        else:
+            if cur is None:
+                # orphan line (e.g. aggregate block w/o a clear location) — keep it
+                cur = {
+                    "crop_year": crop_year,
+                    "crop": crop or "Unknown",
+                    "state": state_hdr,
+                    "location": None,
+                    "raw_text": ln,
+                }
+            else:
+                cur["raw_text"] += " " + ln
+    flush()
+
+    # attach metrics + hash
+    for o in obs:
+        o.update(extract_metrics(o["raw_text"], o["crop"]))
+        o["dedup_hash"] = dedup_hash(o["crop_year"], o["crop"], o["state"],
+                                     o["location"], o["raw_text"])
+        o["report_source"] = report_source
+        o["source_file"] = source_file
+    return obs
+
+
+# --- single emails ------------------------------------------------------------
+# "YIELD:", "Yield:", "YIELD " and resends: "RESEND: Correcting Subject YIELD: ..."
+_SUBJ_PREFIX = re.compile(
+    r"^\s*(?:(?:re|fw|fwd|resend)\s*:\s*)*(?:correcting subject\s*)?yield\b\s*:?\s*", re.I)
+# Lines an email drags along: Inky banner (also as raw links), signature, phone.
+_EMAIL_NOISE = re.compile(
+    r"^(?:\[?external\]?\b|safe\b|report this email|caution\b|more\.\.\.|"
+    r"this (?:message|email) (?:came|is|was)|garrett\s+toay\b|ag\s*trader\s*talk|"
+    r"sent from my|www\.|<?https?://|\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})", re.I)
+_BANNER = re.compile(r"^\s*external\s*\(|inkyphishfence", re.I)
+# List markers: "*<tab>Sac Co, IA: ...", "• ...", "1. ..." — but not "1.0 beans".
+_BULLET = re.compile(r"^\s*(?:[*•·▪◦‣]\s*|-\s+|\d{1,2}[.)]\s+)")
+# Words that make up a place name; the lowercase lookahead keeps an all-caps
+# state ("SW MO Vernon Co") from being read as part of the county.
+_NAME = r"[A-Z](?=[A-Za-z.'\-]*[a-z])[A-Za-z.'\-]+"
+_REGION = (r"(?:North|South|East|West|Central|Northeast|Northwest|Southeast|Southwest|"
+           r"Northern|Southern|Eastern|Western|Northeastern|Northwestern|Southeastern|"
+           r"Southwestern|NE|NW|SE|SW|NC|SC|EC|WC)")
+_COUNTY_IN_TEXT = re.compile(
+    r"((?:%s\s+)?%s(?:\s+%s)?\s+(?:Co\.?|County))\b" % (_REGION, _NAME, _NAME))
+_PLACE_ST = re.compile(r"^(%s(?:\s+%s)?),?\s+(%s)\b" % (_NAME, _NAME, "|".join(ABBRS)))
+# Lines that open a new report in a body without state abbreviations.
+_LEAD_COUNTY = re.compile(
+    r"^((?:%s\s+)?%s(?:\s+%s)?\s+(?:Co\.?|County|county))\b" % (_REGION, _NAME, _NAME))
+_LEAD_REGION = re.compile(r"^(%s\s+(?:%s))\b" % (_REGION, _FULL), re.I)
+# A line that is only a place: "Lee Co, GA", "Sac Co IA"
+_LOCATION_ONLY = re.compile(
+    r"^(?:%s\s+)?%s(?:\s+%s)?\s+(?:Co\.?|County|county)\.?,?\s*(?:%s)?[\s.:]*$"
+    % (_REGION, _NAME, _NAME, "|".join(ABBRS)))
+_LEAD_CROP = re.compile(r"^(corn|soybeans?|beans)\s*[-–:]\s*", re.I)
+_CROP_WORDS = {"corn", "soybeans", "soybean", "beans", "silage"}
+# A second report run into the same line:
+#   "... beans 82-84 bpa. Pleased. Brown Co IL (western) corn avg 238"
+_MIDLINE_REPORT = re.compile(
+    r"(?<=[.!?;])\s+(?=[A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+)?\s+"
+    r"(?:Co\.?|County|Parish)\b,?\s+(?:%s)\b)" % "|".join(ABBRS))
+
+
+def _email_lines(body):
+    """An email body's report lines, without banner, signature or repeats.
+
+    Inky puts the report in the plain-text body twice — a preview line before its
+    banner and the real body after it — so when the banner is there only what
+    follows it is kept (the preview can be cut short). Noise lines then go,
+    reports run together on one line are split, and a line that repeats (or is
+    a cut-short start of) a later line is dropped."""
+    raw = _clean_lines((body or "").replace("\r", "").splitlines())
+    banner = [i for i, ln in enumerate(raw) if _BANNER.search(ln)]
+    if banner:
+        after = [ln for ln in raw[banner[-1] + 1:]
+                 if not _EMAIL_NOISE.match(ln) and not _BANNER.search(ln)]
+        if after:
+            raw = after
+    lines = []
+    for ln in raw:
+        ln = _BULLET.sub("", ln)
+        if (not ln or _EMAIL_NOISE.match(ln) or _BANNER.search(ln)
+                or "@agtradertalk.com" in ln.lower()):
+            continue
+        if ln.endswith(":") and not re.search(r"\d", ln) and not CROP_HDR_RE.match(ln):
+            continue                    # a heading such as "Silage numbers NC IA:"
+        lines.extend(p.strip() for p in _MIDLINE_REPORT.split(ln) if p.strip())
+    # "Lee Co, GA" alone on a line, the report on the next ("Corn: Whole
+    # farm made 206 ..."): one report, so join them
+    joined = []
+    for ln in lines:
+        if joined and _LOCATION_ONLY.match(joined[-1]):
+            joined[-1] += " " + ln
+        else:
+            joined.append(ln)
+    lines = joined
+    keys = [re.sub(r"[\s.…]+$", "", ln.lower()) for ln in lines]
+    return [ln for i, ln in enumerate(lines)
+            if len(keys[i]) < 20
+            or not any(keys[j].startswith(keys[i]) for j in range(i + 1, len(lines)))]
+
+
+def email_crop(subject, body=""):
+    """Crop named in an email's subject, falling back to its body."""
+    for s in (subject or "", body or ""):
+        low = s.lower()
+        soy = re.search(r"\bsoy|\bbeans?\b", low) is not None
+        corn = re.search(r"\bcorn\b|silage", low) is not None
+        if soy != corn:
+            return "Soybeans" if soy else "Corn"
+    return None
+
+
+# Abbreviations that double as directions: NE northeast, NC/SC north/south central.
+_DIRECTIONAL = {"NE", "NC", "SC"}
+
+
+def _first_state(text):
+    """First state named in `text`. A directional NE/NC/SC followed by a state
+    ("NE MO", "NC IA", "NE Nebraska") is the direction; the state is what follows."""
+    text = text or ""
+    for m in re.finditer(r"\b(%s)\b" % "|".join(ABBRS), text):
+        if m.group(1) in _DIRECTIONAL:
+            rest = text[m.end():].lstrip()
+            nxt = re.match(r"(%s)\b" % "|".join(ABBRS), rest)
+            if nxt:
+                return nxt.group(1)
+            full = re.match(r"(%s)\b" % _FULL, rest, re.I)
+            if full:
+                return STATE_ABBR[full.group(1).upper()]
+        return m.group(1)
+    return None
+
+
+def _subject_location(subject):
+    """(location, state) from a subject: a county in parentheses first
+    ("IA Corn (Sac Co IA)"), then a county anywhere ("SW MO Vernon Co corn"),
+    then "Place, ST" ("Chatham, IL soybeans"); else just the state."""
+    subj = _SUBJ_PREFIX.sub("", subject or "").strip()
+    paren = re.search(r"\(([^)]*)\)", subj)
+    for text in ([paren.group(1)] if paren else []) + [subj]:
+        c = _COUNTY_IN_TEXT.search(text)
+        if c:
+            return c.group(1), _first_state(text) or _first_state(subj)
+    p = _PLACE_ST.match(subj)
+    if p and len(p.group(1)) >= 3 and p.group(1).lower() not in _CROP_WORDS:
+        return p.group(1), p.group(2)
+    return None, _first_state(subj)
+
+
+def _lead_rows(lines, subject_loc):
+    """Split a body that names no states into reports, at lines opening with a
+    county ("Lauderdale county, ...", "Northern Vermilion County ..."), a region
+    ("Southwest Ohio ...") or a crop ("Corn - ...", "Beans - ..."). Lines
+    before any such opener form one report located from the subject."""
+    rows, cur = [], None
+    for ln in lines:
+        m = _LEAD_COUNTY.match(ln) or _LEAD_REGION.match(ln)
+        c = _LEAD_CROP.match(ln)
+        if m or c or cur is None:
+            if cur:
+                rows.append(cur)
+            cur = {"location": m.group(1) if m else subject_loc, "raw_text": ln,
+                   "crop": norm_crop(c.group(1)) if c else None}
+        else:
+            cur["raw_text"] += " " + ln
+    if cur:
+        rows.append(cur)
+    return rows
+
+
+def parse_email(subject, body, crop_year, date_reported=None):
+    """One of the report emails -> observation rows, stamped with date_reported.
+
+    A multi-location email ("YIELD: Various Locations") carries one
+    "County, ST: ..." line per report and splits like a PDF section. A
+    single-report email whose body doesn't open with a location becomes one row
+    located from the subject. Crop comes from each report's own words when they
+    name one (an email can carry corn and bean reports), else from the subject;
+    None when neither says."""
+    subject_crop = email_crop(subject)
+    low_subj = (subject or "").lower()
+    all_silage = "silage" in low_subj and not re.search(r"(?:and|&)\s+silage", low_subj)
+    lines = _email_lines(body)
+    rows = parse_lines(lines, crop_year, report_source="email")
+    located = [r for r in rows if r.get("state")]
+    if located:
+        rows = located              # drop greeting lines that preceded the first report
+    else:
+        loc, st = _subject_location(subject)
+        rows = [dict(r, crop_year=crop_year, state=st) for r in _lead_rows(lines, loc)]
+    for r in rows:
+        # a crop header/opener, then the report's own crop word, then the subject's
+        known = r.get("crop") if r.get("crop") not in (None, "Unknown") else None
+        r["crop"] = known or email_crop("", r["raw_text"]) or subject_crop
+        r.update(extract_metrics(r["raw_text"], r["crop"]))
+        if all_silage:              # "YIELD: NC IA silage numbers"
+            r["is_silage"] = True
+        r["dedup_hash"] = dedup_hash(crop_year, r["crop"], r["state"], r["location"],
+                                     r["raw_text"])
+        r["report_source"] = "email"
+        r["source_file"] = None
+        r["date_reported"] = date_reported
+        r["email_subject"] = (subject or "").strip() or None
+    return rows
+
+
+def main():
+    all_obs = []
+    for fname, yr in FILES.items():
+        p = os.path.join(DL, fname)
+        rows = parse_pdf(p, yr)
+        all_obs.extend(rows)
+        with_loc = sum(1 for o in rows if o["location"])
+        with_yld = sum(1 for o in rows if o["yield_bpa"] is not None)
+        print(f"{fname}: {len(rows)} observations "
+              f"({with_loc} with location, {with_yld} with a yield number)")
+
+    cols = ["crop_year", "crop", "state", "location", "yield_bpa", "yield_min",
+            "yield_max", "n_yields", "ly_yield", "expected_yield",
+            "aph", "maturity", "irrigation", "disease",
+            "is_silage", "is_record", "report_source", "source_file",
+            "dedup_hash", "raw_text"]
+    with open(os.path.join(HERE, "yield_observations.csv"), "w", newline="",
+              encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=cols)
+        w.writeheader()
+        for o in all_obs:
+            w.writerow({k: o.get(k) for k in cols})
+    with open(os.path.join(HERE, "yield_observations.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump(all_obs, fh, indent=1, default=str)
+
+    print(f"\nTOTAL: {len(all_obs)} observations")
+    # crop / state coverage
+    from collections import Counter
+    crops = Counter(o["crop"] for o in all_obs)
+    states = Counter(o["state"] for o in all_obs)
+    print("By crop:", dict(crops))
+    print("Top states:", dict(states.most_common(12)))
+    nostate = sum(1 for o in all_obs if not o["state"])
+    print(f"Rows missing state: {nostate}")
+
+
+if __name__ == "__main__":
+    main()
