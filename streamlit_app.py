@@ -80,6 +80,11 @@ pages = [st.Page("app_pages/explore.py", title="Explore", icon=":material/insigh
          st.Page("app_pages/report_text.py", title="Report text", icon=":material/article:")]
 if not VIEW_ONLY:                       # the internal pages never exist on the view link
     pages += [
+        # Variety trials are internal for now: Ohio State has not given written
+        # permission for derived use of its corn test, and the team agreed this stays
+        # out of anything customer-facing until the permissions come back.
+        st.Page("app_pages/trials.py", title="Variety trials",
+                icon=":material/science:"),
         st.Page("app_pages/add.py", title="Add reports", icon=":material/add_circle:"),
         st.Page("app_pages/review.py", title="Review & edit", icon=":material/edit_note:"),
         st.Page("app_pages/import_pdf.py", title="Import PDF",

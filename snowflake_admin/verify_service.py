@@ -2,11 +2,11 @@
 Prove the Yield Portal's service login works — the same key-pair path the
 Streamlit app uses — with no browser.
 
-    python snowflake/verify_service.py
+    python snowflake_admin/verify_service.py
 
 Checks the login as YIELD_PORTAL_SVC, read access (row count), and the CREATE
 TABLE grant that imports need (a temporary table, dropped at once). Run it after
-creating the service user (snowflake/service_user.sql) and after any key
+creating the service user (snowflake_admin/service_user.sql) and after any key
 rotation. Never prints key content.
 """
 import argparse

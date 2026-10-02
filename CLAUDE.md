@@ -34,6 +34,37 @@ row identity, computed once at ingest and never recomputed, so editing a row and
 re-importing the same PDF never duplicates it. Exact duplicate lines inside a PDF
 collapse to one row.
 
+## Variety trials — the second archive
+
+**Variety trials** shows what the state universities published at each test plot, so a
+scout's field report can be read against a replicated one. Two read-only tables,
+`TRIAL_SITE_YEARS` (a location in a season) and `TRIAL_STATE_YEARS` (the programme's
+average against the USDA state yield and its fitted trend), owned by `trials.py`.
+
+Built elsewhere: `export_portal_tables.py` in the `illinois-corn-trials` project writes
+`portal_site_years.csv` and `portal_state_years.csv` from `combine_states.py`, so the
+portal can never disagree with the published page about a state's number. Then:
+
+```
+python load_trials.py                     # local SQLite
+python load_trials.py --target snowflake  # the .env service login
+```
+
+Both tables are **dropped and recreated** on load, not merged: a reload follows an
+upstream parser change, and the whole point is that a site-year's figure moves when the
+extractor improves. A column added upstream therefore needs no ALTER.
+
+**The page is internal.** Ohio State has not given written permission for derived use of
+its corn test, and the team's decision is that this stays out of anything customer-facing
+until the permissions come back — so it is registered only when `not VIEW_ONLY`, and the
+CSVs are **not** committed (this repo is public). Indiana is absent from the data itself:
+Purdue permits reproducing its tables only whole and unmanipulated.
+
+`comparable` is false where a programme's locations change so much across its run that a
+fitted line tracks composition rather than the season (Nebraska dryland corn runs eastern
+counties to 2016 and western ones from 2020, and falls 140 bu without a bad year). Those
+programmes are off by default and the page says why.
+
 ## Fields are the user's choice — don't widen them
 
 Kept: yield (`yield_bpa` + low/high + `ly_yield` + `expected_yield`), `aph`,
@@ -68,6 +99,24 @@ Regex traps already hit: `\w*` backtracking past a negative lookahead (pin with
 never reads `SNOWFLAKE_DATABASE`/`SNOWFLAKE_SCHEMA`, so a multi-app host's
 globals can't redirect it.
 
+**Never name a folder in this repo `snowflake`** — the provisioning scripts live in
+`snowflake_admin/` for this reason, renamed 2026-10-02.
+
+A folder named `snowflake` beside the app makes `snowflake` a namespace package whose
+`__path__` includes it, so Streamlit's watcher counts it as a *local* module — and on
+every file change the watcher deletes all watched modules from `sys.modules`
+(`local_sources_watcher.py`: "we simply unload all watched modules"). Pages then fail
+mid-session with *module 'snowflake' has no attribute 'connector'* on a server that
+started fine, which cost two sessions an afternoon. `server.folderWatchBlacklist` cannot
+help: its globs match a path's *parent* folder, so nothing short of blacklisting the whole
+app folder reaches it.
+
+`sf_connect` still reaches the connector with
+`importlib.import_module("snowflake.connector")` rather than `import snowflake.connector
+as sc` — it returns the submodule from `sys.modules` instead of reading it off the parent,
+which survives that deletion. Keep both defences; `db.py` is the only place in the repo
+that imports the connector.
+
 Two ways in: the `SNOWFLAKE_*` env (key-pair or password) — what the deployed
 app uses — or `SNOWFLAKE_CONNECTION_NAME`, a profile in
 `~/.snowflake/connections.toml` for local runs (browser sign-in once per script
@@ -77,8 +126,8 @@ Credential Manager, which rejects it (`CredWrite: The stub received bad data`)
 and the connect fails. Don't install keyring for this.
 
 ```
-python snowflake/setup.py --connection <profile> --check   # prove the sign-in
-python snowflake/setup.py --connection <profile>           # create + copy, one connection
+python snowflake_admin/setup.py --connection <profile> --check  # prove the sign-in
+python snowflake_admin/setup.py --connection <profile>          # create + copy, one connection
 ```
 
 The copy is from local SQLite (not the PDFs) so dates and edits come across. It
@@ -102,13 +151,13 @@ a plain message, never connection details.
 The app logs in as a **service user** with key-pair auth: `YIELD_PORTAL_SVC`
 (TYPE=SERVICE) with `YIELD_PORTAL_ROLE` (usage on the warehouse / YIELD_REPORTS /
 PUBLIC; SELECT/INSERT/UPDATE/DELETE on the table; CREATE TABLE on the schema for
-the temp staging table imports use) — `snowflake/service_user.sql`. Secrets:
+the temp staging table imports use) — `snowflake_admin/service_user.sql`. Secrets:
 `USE_SNOWFLAKE`, `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_ROLE`,
 `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_PRIVATE_KEY` (PEM in `"""…"""`),
 `EDIT_PASSWORD`. Never set `SNOWFLAKE_DATABASE`/`_SCHEMA`. After changing
 Secrets, **Reboot** the app: the secrets→env bridge in `streamlit_app.py` never
 overwrites a variable that's already set, so a running app keeps the old value.
-Prove the login path with `python snowflake/verify_service.py` (no browser,
+Prove the login path with `python snowflake_admin/verify_service.py` (no browser,
 never prints key content).
 
 ## Running
