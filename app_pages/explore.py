@@ -24,7 +24,14 @@ st.title("Yield reports")
 st.caption("Ag Trader Talk county field reports, harvest 2023 onward. "
            "Averages are of the reports themselves, not county or state estimates.")
 
-df = data.load_all()
+try:
+    df = data.load_all()
+except Exception as exc:                  # e.g. the database login is refused
+    # the view link is public: say what's wrong without the connection details
+    st.error("The reports can't be loaded right now. Please try again later."
+             if VIEW_ONLY else f"Couldn't read the reports database: {exc}",
+             icon=":material/cloud_off:")
+    st.stop()
 if df.empty:
     st.info("No reports yet. Load them on **Import PDF** or **Add reports**.")
     st.stop()
