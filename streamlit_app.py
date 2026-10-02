@@ -6,8 +6,8 @@ Run locally:  streamlit run streamlit_app.py
 
 Access: the app is public on Community Cloud, so everything sits behind a
 password. EDIT_PASSWORD opens the whole app; VIEW_PASSWORD opens only the
-read-only Explore page (no downloads). ?view=1 forces read-only even for the
-edit password. With neither set (local dev) the app is open.
+read-only Explore page (no downloads) — optional; without it the edit password is
+the only way in. ?view=1 forces read-only even for the edit password. With neither set (local dev) the app is open.
 """
 import hmac
 import os
@@ -59,7 +59,7 @@ def _require_password():
     with st.container(border=True, width=420):
         st.markdown("#### :material/lock: Yield reports")
         st.caption("Enter your password. The view password opens the reports read-only; "
-                   "the edit password opens everything.")
+                   "the edit password opens everything." if view_pw else "Enter the password.")
         pw = st.text_input("Password", type="password", key="_pw")
         if pw:
             if edit_pw and hmac.compare_digest(pw, edit_pw):
