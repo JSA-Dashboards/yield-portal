@@ -78,6 +78,30 @@ def backend_name():
     return f"SQLite ({LOCAL_SQLITE.name})"
 
 
+_BASE64 = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+
+
+def _pem_bytes(text):
+    """A PEM key as pasted into Streamlit secrets -> bytes for cryptography.
+    Literal \\n, CRLF and indented lines are forgiven. Anything else that isn't
+    key text (an example's '…' placeholder, a smart quote) is named by
+    character and line, never quoting the key, instead of cryptography's
+    'Invalid symbol 226, offset 0'."""
+    lines = [ln.strip() for ln in text.replace("\\n", "\n").splitlines()]
+    lines = [ln for ln in lines if ln]
+    if not lines or not lines[0].startswith("-----BEGIN "):
+        raise ValueError("SNOWFLAKE_PRIVATE_KEY must start with its "
+                         "-----BEGIN PRIVATE KEY----- line.")
+    for n, ln in enumerate(lines[1:-1], 1):
+        bad = next((c for c in ln if c not in _BASE64), None)
+        if bad is not None:
+            raise ValueError(
+                f"SNOWFLAKE_PRIVATE_KEY isn't the real key: line {n} after BEGIN has "
+                f"{bad!r}, which never appears in a key (an example placeholder?). "
+                "Paste the whole .p8 key file between the triple quotes.")
+    return ("\n".join(lines) + "\n").encode()
+
+
 def _load_private_key():
     """RSA key for Snowflake key-pair auth, as DER bytes; None if not configured
     (then password auth). Source: SNOWFLAKE_PRIVATE_KEY_PATH (.p8 file) or
@@ -87,7 +111,7 @@ def _load_private_key():
     if not path and not pem.strip():
         return None
     from cryptography.hazmat.primitives import serialization
-    data = open(path, "rb").read() if path else pem.replace("\\n", "\n").encode()
+    data = open(path, "rb").read() if path else _pem_bytes(pem)
     pwd = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PWD") or None
     key = serialization.load_pem_private_key(
         data, password=pwd.encode() if pwd else None)
