@@ -152,7 +152,15 @@ def sf_connect(database=SF_DATABASE, schema=SF_SCHEMA):
     — for local runs against the Analytics account, whose profile signs in
     through the browser and caches the token. Otherwise the SNOWFLAKE_* env
     (key-pair or password), which is what the deployed app uses."""
-    import snowflake.connector as sc
+    # import_module rather than `import snowflake.connector as sc`: it returns the
+    # submodule from sys.modules instead of reading it off the parent, so it holds up
+    # when something has just dropped `snowflake` from sys.modules. That used to happen
+    # here every time a file changed — the project's own snowflake/ folder made the
+    # parent a watched local module — and cost two sessions an afternoon to
+    # "module 'snowflake' has no attribute 'connector'". The folder is snowflake_admin/
+    # now, so the collision is gone; this stays as the cheaper of the two defences.
+    import importlib
+    sc = importlib.import_module("snowflake.connector")
     named = (os.environ.get("SNOWFLAKE_CONNECTION_NAME") or "").strip()
     if named:
         key = (named, database, schema)
@@ -218,7 +226,7 @@ def _ddl():
 
 def init_db():
     """Create the table locally. On Snowflake the database and table are created
-    once by snowflake/setup.py, so app start does no DDL there."""
+    once by snowflake_admin/setup.py, so app start does no DDL there."""
     if use_snowflake():
         return
     conn, _ = _connect()

@@ -3,8 +3,8 @@ One-time setup of the Yield Portal on the Analytics Snowflake account, then a
 copy of everything in the local SQLite archive into it — all over ONE
 connection, so a browser sign-in happens once.
 
-    python snowflake/setup.py --connection <profile> --check   # prove the sign-in
-    python snowflake/setup.py --connection <profile>           # create + copy
+    python snowflake_admin/setup.py --connection <profile> --check  # prove the sign-in
+    python snowflake_admin/setup.py --connection <profile>          # create + copy
 
 --connection names a profile in ~/.snowflake/connections.toml (the Analytics
 account's signs in through the browser); without it, SNOWFLAKE_* from this
