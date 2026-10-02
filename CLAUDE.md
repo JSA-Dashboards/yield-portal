@@ -92,10 +92,12 @@ assignments fail.
 
 Streamlit Community Cloud from this repo (branch `master`, `streamlit_app.py`).
 The repo was created directly in the org — a transferred repo's webhook
-silently stops deploying. The app is **public** on Community Cloud (one private
-app per workspace), so access is by password: `EDIT_PASSWORD` (everything) and
-`VIEW_PASSWORD` (read-only Explore, no downloads; optional — without it one
-password opens everything); `?view=1` forces read-only but still needs a password.
+silently stops deploying. The app is **public** on Community Cloud (one private app per workspace), so
+access works like the River FOB portal: `?view=1` is the password-free
+read-only share link — Explore only, no downloads, and Add reports / Review &
+edit / Import PDF aren't even registered there ("those are just for us").
+Everything else needs `EDIT_PASSWORD`. On the view link a database error shows
+a plain message, never connection details.
 
 The app logs in as a **service user** with key-pair auth: `YIELD_PORTAL_SVC`
 (TYPE=SERVICE) with `YIELD_PORTAL_ROLE` (usage on the warehouse / YIELD_REPORTS /
@@ -103,7 +105,7 @@ PUBLIC; SELECT/INSERT/UPDATE/DELETE on the table; CREATE TABLE on the schema for
 the temp staging table imports use) — `snowflake/service_user.sql`. Secrets:
 `USE_SNOWFLAKE`, `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_ROLE`,
 `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_PRIVATE_KEY` (PEM in `"""…"""`),
-`EDIT_PASSWORD`, `VIEW_PASSWORD`. Never set `SNOWFLAKE_DATABASE`/`_SCHEMA`.
+`EDIT_PASSWORD`. Never set `SNOWFLAKE_DATABASE`/`_SCHEMA`.
 Prove the login path with `python snowflake/verify_service.py` (no browser,
 never prints key content).
 
