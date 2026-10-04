@@ -13,6 +13,7 @@ import pandas as pd
 import parse_pdfs as P
 
 CHECKS = {
+    "incomplete": "The email didn't say which crop or state: set them by hand",
     "split": "Gives yields for both corn and soybeans: one report per crop is suggested",
     "range": "Yield outside the usual range (corn 50–300 bpa, soybeans 10–100)",
     "corn?": "A soybean yield over 100 bpa, so probably a corn report",
@@ -92,6 +93,9 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
 
     for i, r in enumerate(out.to_dict("records")):
         if gone[i]:
+            continue
+        if r["crop"] not in ("Corn", "Soybeans") or _missing(r["state"]) or not r["state"]:
+            flags[i].append("incomplete")     # an auto-loaded email nobody could place
             continue
         parts = r["_split"] if "_split" in r else P.split_by_crop(r["raw_text"] or "", r["crop"])
         if parts:                    # the split answers the crop and the figures

@@ -19,6 +19,15 @@ gitignored, on Kolten's PC only. Read `CLAUDE.local.md` when it's there.
   adds it as new, or lists it for review. Oldest first, so the first report
   date wins; an email whose Message-ID is on a row is skipped (idempotent). Only
   sees Outlook's cached mail — Outlook must be open and synced.
+- **Emails, automatically**: the Windows scheduled task **"Yield Portal - email
+  sync"** on Kolten's PC runs `pythonw match_emails.py --target snowflake --auto`
+  every 30 minutes while he's logged in (Outlook COM needs his session; missed
+  runs catch up). `--auto` writes, logs to `logs/email_sync.log` (gitignored —
+  it can quote reports) and records each run in `EMAIL_SYNC_RUNS`; Review & edit
+  shows when the emails were last checked and flags a failed run. A report with
+  no crop or state is stored anyway and waits as **Needs crop/state**
+  (`incomplete` check) instead of being lost. Moving this to the droplet needs
+  Microsoft Graph mail access from IT (the basis tracker's pending request).
 - **Emails, one at a time**: paste on **Add reports** — same parser and matcher.
 - **By hand**: **Add reports → Enter by hand**.
 - **Email format traps** (all in `parse_email` / `_email_lines`): the mail
@@ -41,6 +50,7 @@ came in by, and never changes a report — it raises flags:
 
 | flag | rule | suggested fix |
 |---|---|---|
+| `incomplete` | no crop or no state (an email nobody could place) | — set them by hand |
 | `split` | yields for both corn and soybeans in one report (`parse_pdfs.split_by_crop`) | one report per crop; the original is marked `superseded` |
 | `range` | corn outside 50–300 bpa, soybeans under 10 | — |
 | `corn?` | soybeans over 100 bpa (corn filed under the soybean header) | crop → Corn |
