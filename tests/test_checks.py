@@ -85,6 +85,26 @@ check("a superseded twin no longer makes a duplicate", decided.loc[6, "review_fl
 check("describe a fix", checks.describe_fix({"crop": "Corn", "yield_bpa": 247.0, "ly_yield": None}),
       "crop → Corn, yield → 247, last year → —")
 
+# --- a report with both crops -------------------------------------------------------
+both = row("Story Co, IA: Corn running 205 bu/ac vs 215 target. First beans went 61 bu/ac "
+           "vs 55 LY.", crop="Soybeans", state="IA", location="Story Co", notes="from a call")
+one = checks.run(pd.DataFrame([both]), {})
+check("two crops: flagged 'split' (not 'probably corn')", one.loc[0, "review_flags"], ["split"])
+check("...suggesting one report per crop", sorted(one.loc[0, "suggestion"]["split"]),
+      ["Corn", "Soybeans"])
+check("...described with each part's yield", checks.describe_fix(one.loc[0, "suggestion"]),
+      "split into Corn 205 bpa + Soybeans 61 bpa")
+kids = checks.split_rows(one.iloc[0].to_dict())
+check("the split makes a corn and a soybean report",
+      [(k["crop"], k["yield_bpa"], k["ly_yield"]) for k in kids],
+      [("Corn", 205.0, None), ("Soybeans", 61.0, 55.0)])
+check("...each with its own hash, carrying place and notes",
+      (len({k["dedup_hash"] for k in kids} | {both["dedup_hash"]}),
+       {k["location"] for k in kids}, {k["notes"] for k in kids}), (3, {"Story Co"}, {"from a call"}))
+pre = checks.row_checks(pd.DataFrame([both]))
+check("row checks computed ahead give the same result",
+      checks.run(pre, {}).loc[0, "suggestion"], one.loc[0, "suggestion"])
+
 if failures:
     print(f"{len(failures)} FAILED:")
     for f in failures:

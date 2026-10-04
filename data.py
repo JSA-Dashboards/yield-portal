@@ -27,9 +27,11 @@ NUMERIC = ["yield_bpa", "yield_min", "yield_max", "ly_yield", "expected_yield", 
 
 @st.cache_data(ttl=600, show_spinner="Loading reports…")
 def _reports() -> pd.DataFrame:
-    """Every report, typed (cached apart from the decisions: approving one
-    doesn't change any report, so it shouldn't re-read them all)."""
-    return _typed(db.fetch_all())
+    """Every report, typed, with the checks that depend on its text alone
+    (cached apart from the decisions: approving one doesn't change any report,
+    so it shouldn't re-read or re-parse them all)."""
+    import checks
+    return checks.row_checks(_typed(db.fetch_all()))
 
 
 @st.cache_data(ttl=600, show_spinner=False)

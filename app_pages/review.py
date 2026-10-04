@@ -14,7 +14,7 @@ STATES = sorted(P.ABBRS)
 EDIT_COLS = ["crop_year", "date_reported", "crop", "state", "location", "yield_bpa",
              "yield_min", "yield_max", "ly_yield", "expected_yield", "aph", "maturity",
              "irrigation", "disease", "is_silage", "is_record", "raw_text", "notes"]
-SHORT = {"duplicate": "Possible duplicate", "corn?": "Probably corn",
+SHORT = {"split": "Two crops", "duplicate": "Possible duplicate", "corn?": "Probably corn",
          "reread": "Parser reads it differently", "range": "Out of range"}
 STATUS = {"clean": "", "flagged": "Needs review", "approved": "Approved", "excluded": "Excluded"}
 
@@ -53,6 +53,20 @@ def _approve(r, clear, note):
         return
     keep = sorted(set(r["approved_flags"]) | set(clear))
     db.set_decision(r["dedup_hash"], "approved", keep, note, _who())
+
+
+def _fix(r, note):
+    """Apply a report's suggested fix. A split makes one report per crop (each
+    with its own sentences and figures) and marks the original superseded;
+    any other fix is written over the report, which is then approved."""
+    if "split" in (r["suggestion"] or {}):
+        kids = checks.split_rows(r)
+        db.insert_new(kids)
+        db.set_decision(r["dedup_hash"], "superseded", ["split"],
+                        "split by crop into " + ", ".join(k["dedup_hash"] for k in kids), _who())
+    else:
+        db.update_row(r["dedup_hash"], r["suggestion"])
+        _approve(r, r["review_flags"], note)
 
 
 def _place(r):
@@ -133,13 +147,14 @@ if mode == "queue":
     if len(fixable):
         with st.expander(f"Apply all {len(fixable)} suggested fixes in this list"):
             st.caption("Only reports whose every flag comes with a fix (probably corn, parser "
-                       "re-reads). Each gets its fix and is approved. Look the list over first.")
+                       "re-reads). Each gets its fix. Look the list over first. Two-crop "
+                       "splits aren't included: some read a rotation note or a second "
+                       "report as the other crop, so each one gets a look.")
             ok = st.checkbox("I've checked the suggested fixes below", key="rev_bulk_ok")
             if st.button(f"Apply {len(fixable)} fixes", icon=":material/done_all:",
                          disabled=not ok):
                 for r in fixable.to_dict("records"):
-                    db.update_row(r["dedup_hash"], r["suggestion"])
-                    _approve(r, r["review_flags"], "suggested fix applied (bulk)")
+                    _fix(r, "suggested fix applied (bulk)")
                 _done(f"Applied {len(fixable)} suggested fixes.", reports_changed=True)
 
     table = queue.assign(
@@ -179,13 +194,14 @@ if mode == "queue":
                 st.markdown("> " + RT.md_report(o["raw_text"], o["location"], o["state"]))
         if r["suggestion"]:
             st.markdown(f"**Suggested fix:** {checks.describe_fix(r['suggestion'])}")
+            for crop, text in (r["suggestion"].get("split") or {}).items():
+                st.markdown(f"> **{crop}:** " + RT.md_escape(text))
 
         with st.container(horizontal=True):
             if r["suggestion"]:
                 if st.button("Apply fix", type="primary", icon=":material/auto_fix_high:"):
-                    db.update_row(r["dedup_hash"], r["suggestion"])
-                    _approve(r, r["review_flags"], "suggested fix applied")
-                    _done("Fix applied and approved.", reports_changed=True)
+                    _fix(r, "suggested fix applied")
+                    _done("Fix applied.", reports_changed=True)
             if len(others):
                 if st.button("Keep both: different reports", icon=":material/call_split:"):
                     for o in [r] + others.to_dict("records"):

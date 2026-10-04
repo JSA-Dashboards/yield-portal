@@ -198,7 +198,7 @@ LY_TAIL_RE = re.compile(
 # (?!\d) stops \d{2,3} backtracking to "10" of "100%", and (?!\.\d) — not
 # (?![\d.]) — still lets "expected 40." end a sentence.
 _EXP_POST = re.compile(
-    r"^\W{0,3}(expect\w*|estimat\w*)\b"
+    r"^\W{0,3}(expect\w*|estimat\w*|target\w*|budget\w*)\b"
     r"(?!\W{0,3}\d{2,3}(?:\.\d+)?(?!\d)(?!\.\d)(?!\s*%))", re.I)
 _EXP_PRE = re.compile(r"(expect\w*|hop\w* (?:for|to))\W{0,10}$", re.I)
 # ...but "better than expected 140 bpa" is a finished comparison: 140 is the yield.
@@ -319,7 +319,83 @@ def extract_yields(text):
         m = EXP_NUM_RE.search(text)
         if m:
             exp.append(float(m.group(1)))
+    # Several fields and a stated farm average: the average speaks for the report
+    # ("120 acres made 190 bpa ... Overall farm avg near 238 bpa" is 238).
+    m = FARM_AVG_RE.search(text)
+    if m and float(m.group(1)) in cur and not _other_place_between(text, m.start()):
+        v = float(m.group(1))
+        cur = [v] + [c for c in cur if c != v]
     return cur, ly, exp
+
+
+_PLACE_MARK = re.compile(r"\b(?:%s)\b|\b(?:Co\.?|County|Parish)\b" % "|".join(sorted(ABBRS)))
+
+
+def _other_place_between(text, upto):
+    """True when another place is named between the report's first yield and
+    `upto`: in "Sac County Iowa ... 220 bpa ... W TN whole farm average of 201",
+    the 201 is West Tennessee's, a second report run into the line."""
+    first = YIELD_RE.search(text)
+    return bool(first and first.end() < upto and _PLACE_MARK.search(text, first.end(), upto))
+
+
+# "whole farm average 88", "Farm avg was 206", "Overall farm avg near 238": the
+# words must sit together, so "whole farm non-irrigated average of 44 ... LY" (a
+# last-year figure) isn't taken; and the figure must already read as this year's.
+FARM_AVG_RE = re.compile(
+    r"\b(?:whole[- ]?farm|overall(?:\s+farm)?|farm)\s+(?:yield\s+)?(?:avg|average)\b"
+    r"(?:\s+(?:was|is|of|at|near|right at|around|about|so far))*\s*[:=]?\s*"
+    r"(\d{2,3}(?:\.\d+)?)(?!\d)(?!\.\d)", re.I)
+
+
+# --- a report that gives yields for both crops -----------------------------------
+_ABBREV = {"co", "st", "ste", "vs", "approx", "mt", "ft", "no", "bu", "ac", "mr", "dr"}
+_CORN_WORD = re.compile(r"\bcorn\b|\bsilage\b", re.I)
+_SOY_WORD = re.compile(r"\bsoy\w*|\bbeans?\b", re.I)
+
+
+def _sentences(text):
+    """Split at sentence ends, but not after "Co." / "St." / "vs." and the like."""
+    out, start = [], 0
+    for m in re.finditer(r"[.!?;]\s+(?=[A-Z0-9\"“(])", text):
+        word = re.findall(r"([A-Za-z.]+)$", text[start:m.start()])
+        if word and word[0].lower().rstrip(".") in _ABBREV:
+            continue
+        out.append(text[start:m.end()].strip())
+        start = m.end()
+    out.append(text[start:].strip())
+    return [s for s in out if s]
+
+
+def split_by_crop(text, default_crop=None):
+    """{crop: its sentences} when a report gives yields for both crops, else None.
+    Each sentence belongs to the crop it names (the first named, if both), or the
+    one before it; leading sentences that name none go with the first crop. Only
+    a suggestion: "Corn last year. 75 bpa two years ago" in a bean report reads as
+    corn here, so a person confirms every split."""
+    segs, cur = [], None
+    for s in _sentences(text or ""):
+        c, b = _CORN_WORD.search(s), _SOY_WORD.search(s)
+        crop = ("Corn" if c.start() < b.start() else "Soybeans") if c and b else \
+            "Corn" if c else "Soybeans" if b else None
+        crop = crop or cur
+        if segs and (crop == segs[-1][0] or crop is None):
+            segs[-1][1].append(s)
+        else:
+            segs.append([crop, [s]])
+        cur = crop or cur
+    if segs and segs[0][0] is None:
+        if len(segs) > 1:
+            segs[1][1] = segs[0][1] + segs[1][1]
+            segs = segs[1:]
+        else:
+            segs[0][0] = default_crop
+    parts = {}
+    for crop, ss in segs:
+        parts.setdefault(crop, []).extend(ss)
+    parts = {c: " ".join(ss) for c, ss in parts.items() if c in ("Corn", "Soybeans")}
+    with_yield = {c: t for c, t in parts.items() if extract_yields(t)[0]}
+    return with_yield if len(with_yield) > 1 else None
 
 
 # APH: "APH 210", "APH of 250", "Aph on field is 235ish", "APH was 47 bpa",

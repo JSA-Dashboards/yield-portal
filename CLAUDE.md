@@ -41,10 +41,22 @@ came in by, and never changes a report — it raises flags:
 
 | flag | rule | suggested fix |
 |---|---|---|
+| `split` | yields for both corn and soybeans in one report (`parse_pdfs.split_by_crop`) | one report per crop; the original is marked `superseded` |
 | `range` | corn outside 50–300 bpa, soybeans under 10 | — |
 | `corn?` | soybeans over 100 bpa (corn filed under the soybean header) | crop → Corn |
 | `reread` | today's parser reads a different yield or LY from the stored text | the fresh reading |
 | `duplicate` | same year, crop, state, place (`data.loc_key`) and yield as another row | — |
+
+**One report per crop; one figure per report.** `split_by_crop` follows the crop
+each sentence names (or the one before) and suggests a split only when both crops
+carry a yield — never automatically, and never in the bulk fix: it reads a bean
+report's "Corn last year. 75 bpa two years ago" (rotation history) or a second
+report run into the line as the other crop. Several fields of one crop stay one
+report (a chatty farm shouldn't count five times): the first figure is the
+yield, unless the report states a whole-farm/overall average, which then leads
+(`FARM_AVG_RE`, skipped when another place is named in between). The text-only
+checks (re-read, split) are computed once with the cached reports
+(`checks.row_checks`), so a decision doesn't re-parse 1,300 reports.
 
 A person decides on **Review & edit → Needs review**: apply the fix, approve as it
 is, keep both (duplicates), exclude, or edit by hand. Decisions live in

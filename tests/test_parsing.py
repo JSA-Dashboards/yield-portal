@@ -158,6 +158,31 @@ check("'vs.73 bpa last year' (no space after the stop) is still last year",
 check("'expected 220bpa' alone is still the expectation",
       yields("Yield 47 bpa expected 220bpa after hail.")[::2], ([47], [220]))
 
+check("a stated farm average speaks for a report with several fields",
+      yields("Polk Co, IA: 80 acres made 182 bpa. Wet spots. Whole farm avg 214 bpa.")[0][0], 214)
+check("...but not one that belongs to another place run into the line",
+      yields("Polk Co, IA 140 acres @ 220 bpa vs 230 last year. E KS whole farm average "
+             "of 190 bu/ac")[0][0], 220)
+check("'vs 165 bu/ac target' is the expectation, not a yield",
+      yields("Running about 150 bu/ac vs 165 bu/ac target.")[::2], ([150], [165]))
+
+# --- one report, both crops -----------------------------------------------------
+mixed = ("Story Co, IA: Corn about 70% out, running 205 bu/ac vs 215 target. Starting on "
+         "soybeans. First beans went 61 bu/ac vs 55 LY. Moisture 12%.")
+parts = P.split_by_crop(mixed, "Soybeans")
+check("yields for both crops -> one part per crop", sorted(parts), ["Corn", "Soybeans"])
+check("each part keeps its own figures",
+      (P.extract_metrics(parts["Corn"], "Corn")["yield_bpa"],
+       P.extract_metrics(parts["Soybeans"], "Soybeans")[("yield_bpa")],
+       P.extract_metrics(parts["Soybeans"], "Soybeans")["ly_yield"]), (205, 61, 55))
+check("sentences without a crop stay with the crop before them", parts["Soybeans"].endswith("12%."),
+      True)
+check("a crop named without a yield is not a second report",
+      P.split_by_crop("Lee Co, IL: Beans 62 bpa. Corn harvest starts next week.", "Soybeans"), None)
+check("'Co.' doesn't end a sentence",
+      P._sentences("Polk Co. IA corn 210 bpa. Beans 58 bpa."), ["Polk Co. IA corn 210 bpa.",
+                                                              "Beans 58 bpa."])
+
 # --- PDF lines: a report per place, even without a separator --------------------
 rows = P.parse_lines(["Corn", "Piatt Co IL Harvest started, 228 bpa dry.",
                       "Macon Co, IL 30 acres did 241 bpa", "Howard Co – 150 bpa",
