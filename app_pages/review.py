@@ -190,13 +190,15 @@ if mode == "queue":
                               na_position="last").reset_index(drop=True)
 
     fixable = queue[queue["suggestion"].notna()
-                    & queue["review_flags"].map(lambda f: set(f) <= {"corn?", "reread"})]
+                    & queue["review_flags"].map(
+                        lambda f: set(f) <= {"corn?", "reread", "incomplete"})]
     if len(fixable):
         with st.expander(f"Apply all {len(fixable)} suggested fixes in this list"):
             st.caption("Only reports whose every flag comes with a fix (probably corn, parser "
-                       "re-reads). Each gets its fix. Look the list over first. Two-crop "
-                       "splits aren't included: some read a rotation note or a second "
-                       "report as the other crop, so each one gets a look.")
+                       "re-reads, no crop named but a corn-sized yield). Each gets its fix. "
+                       "Look the list over first. Two-crop splits aren't included: some read "
+                       "a rotation note or a second report as the other crop, so each one "
+                       "gets a look.")
             ok = st.checkbox("I've checked the suggested fixes below", key="rev_bulk_ok")
             if st.button(f"Apply {len(fixable)} fixes", icon=":material/done_all:",
                          disabled=not ok):

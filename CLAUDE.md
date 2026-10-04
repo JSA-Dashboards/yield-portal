@@ -18,7 +18,14 @@ gitignored, on Kolten's PC only. Read `CLAUDE.local.md` when it's there.
   by default), and per report: stamps the date on the matching archive row,
   adds it as new, or lists it for review. Oldest first, so the first report
   date wins; an email whose Message-ID is on a row is skipped (idempotent). Only
-  sees Outlook's cached mail — Outlook must be open and synced.
+  sees classic Outlook's local cache, which is only as fresh as its last sync
+  (Kolten reads mail in the new Outlook). The Archive folder syncs after the
+  Inbox and can lag months behind the server. Mail the cache can't reach yet:
+  save it from Outlook's server search as `.msg` and pass it with `--msg`.
+  Skipped: emails without YIELD in the subject (a conversation with the source
+  carries signatures, not reports). A colleague's forward ("FW: YIELD: ...") is
+  read as the original: subject, report and send time come from the innermost
+  forwarded header block (`parse_pdfs.unwrap_forward`).
 - **Emails, automatically**: the Windows scheduled task **"Yield Portal - email
   sync"** on Kolten's PC runs `pythonw match_emails.py --target snowflake --auto`
   every 30 minutes while he's logged in (Outlook COM needs his session; missed
@@ -26,8 +33,10 @@ gitignored, on Kolten's PC only. Read `CLAUDE.local.md` when it's there.
   it can quote reports) and records each run in `EMAIL_SYNC_RUNS`; Review & edit
   shows when the emails were last checked and flags a failed run. A report with
   no crop or state is stored anyway and waits as **Needs crop/state**
-  (`incomplete` check) instead of being lost. Moving this to the droplet needs
-  Microsoft Graph mail access from IT (the basis tracker's pending request).
+  (`incomplete` check) instead of being lost. When the task has to start Outlook
+  itself (no window), it waits up to 4 minutes for the cache to settle before
+  reading. Moving this to the droplet needs Microsoft Graph mail access from IT
+  (the basis tracker's pending request).
 - **Emails, one at a time**: paste on **Add reports** — same parser and matcher.
 - **By hand**: **Add reports → Enter by hand**.
 - **Email format traps** (all in `parse_email` / `_email_lines`): the mail
@@ -35,8 +44,12 @@ gitignored, on Kolten's PC only. Read `CLAUDE.local.md` when it's there.
   its banner, real body after) — keep only what follows the banner; `*<tab>`
   bullets; a place alone on a line with "Corn: ..." on the next; two reports
   run into one line; state-less bodies split at county / region / "Corn -"
-  openers; `RESEND: Correcting Subject YIELD: ...`; NE/NC/SC before a state is a
-  direction ("NE MO" is northeast Missouri).
+  openers; `RESEND: Correcting Subject YIELD: ...` and `CORRECTION: YIELD: ...`;
+  NE/NC/SC before a state is a direction ("NE MO" is northeast Missouri); state
+  headings ("Missouri:") over bullets that name no state, kept as state headers;
+  "-Linn Co-Central MO- 100 acres" bullets (dash with no space, hyphens for
+  commas, region before the state: `HYPHEN_CO_RE`) and "Greene County-picked"
+  (`NOSTATE_CO_RE` takes a hyphen running straight into the text, not "Co-op").
 
 `dedup_hash` (year | crop | state | location | whitespace-normalised text) is the
 row identity, computed once at ingest and never recomputed, so editing a row and
@@ -50,7 +63,7 @@ came in by, and never changes a report — it raises flags:
 
 | flag | rule | suggested fix |
 |---|---|---|
-| `incomplete` | no crop or no state (an email nobody could place) | — set them by hand |
+| `incomplete` | no crop or no state (an email nobody could place) | crop → Corn when the state is known and the yield is over 100 bpa; else set by hand |
 | `split` | yields for both corn and soybeans in one report (`parse_pdfs.split_by_crop`) | one report per crop; the original is marked `superseded` |
 | `range` | corn outside 50–300 bpa, soybeans under 10 | — |
 | `corn?` | soybeans over 100 bpa (corn filed under the soybean header) | crop → Corn |
