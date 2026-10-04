@@ -63,6 +63,36 @@ inserted, carrying the old row's date/email/notes, and the old row is marked
 `superseded` with the new hashes in its note. A second run finds nothing. (What
 the first run did, and what the checks found, is in `CLAUDE.local.md`.)
 
+## Reports vs normal — the reports against NASS (internal)
+
+`app_pages/normal.py`, registered only off the view link. Each report's yield (its
+first figure, `yield_bpa`) is divided by three NASS baselines (`analysis.attach`):
+the 5-season average before its season and last season's final — its county's when
+the place matches a county, else its state's — and USDA's state number for its own
+season (the final, else the latest monthly forecast). Medians; every report counts
+once (acres are not used); a confidence label on every number by report count
+(`analysis.tier`: under 3 "Too few", 3–9 "Directional", 10+ "Firmer"); thin counties
+pulled toward their state, `(n·raw + 3·state)/(n + 3)`, shown raw and pulled. No
+trend test: too few seasons. Reports run optimistic (about 1.1–1.2× NASS), so the
+page reads each season against the same ratios in earlier seasons, never against
+1.0. Plus the reporters' own same-field "vs last year" figures, which need no NASS.
+
+NASS comes **only** from the fleet's cache (`nass.py`), never the live API: one
+Snowflake query for the county-yield and state-yield rows, keyed with the vendored
+`nass_cache_client._cache_key` (keep that file byte-identical to usda-nass-etl's).
+`nass.county_params` / `state_params` must match `jobs/rma_map.py` (first COUNTY
+family) and `jobs/domestic_production.py` exactly, or the key misses and the page
+goes blank. The current season's NASS "YEAR" row is USDA's latest forecast, not a
+final: it counts as final only when loaded after the following January. The
+portal's role needs SELECT on `JSA.NASS_CACHE.NASS_CACHE` (granted 2026-10-04).
+
+County matching (`places.py`) works on a key derived from the location; the text
+itself never changes. A county named with a county word ("Northern Vermilion
+County") or several ("Moultrie/Coles Co") is used straight away; a near-spelling
+("Vermillion Co") or a bare town that shares a county's name ("Peoria" — but "Des
+Moines" is in Polk County) waits on **Review & edit → Places** (`COUNTY_MATCHES`);
+towns and regions use the state's numbers rather than a guessed county.
+
 ## Variety trials — the second archive
 
 **Variety trials** shows what the state universities published at each test plot, so a
