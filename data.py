@@ -27,14 +27,19 @@ NUMERIC = ["yield_bpa", "yield_min", "yield_max", "ly_yield", "expected_yield", 
 
 @st.cache_data(ttl=600, show_spinner="Loading reports…")
 def load_all() -> pd.DataFrame:
-    """Every observation (cached for the pages). The table is small (~1-2k
-    rows), so pages load it once and filter in memory."""
-    return frame()
+    """Every live observation (cached for the pages): superseded rows (replaced
+    by others, e.g. a merged PDF line that was split) are dropped. The table is
+    small (~1-2k rows), so pages load it once and filter in memory."""
+    df = frame()
+    return df[df["status"] != "superseded"].reset_index(drop=True)
 
 
 def frame() -> pd.DataFrame:
-    """Every observation, typed, plus derived columns — uncached, for scripts."""
-    rows = db.fetch_all()
+    """Every observation, typed, plus derived columns and the review checks
+    (checks.run: review_flags, suggestion, status, in_analysis) — uncached, for scripts.
+    Superseded rows are included; callers that match or display drop them."""
+    import checks                  # here, not at the top: checks imports this module
+    rows, decisions = db.fetch_all_and_decisions()
     df = pd.DataFrame(rows, columns=db.COL_NAMES)
     for c in NUMERIC:
         df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -49,7 +54,7 @@ def frame() -> pd.DataFrame:
         df[c] = df[c].map(lambda v: bool(v) if pd.notna(v) else False)
     df["vs_ly"] = df["yield_bpa"] - df["ly_yield"]
     df["vs_aph"] = df["yield_bpa"] - df["aph"]
-    return df
+    return checks.run(df, decisions)
 
 
 def invalidate():

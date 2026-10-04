@@ -34,6 +34,35 @@ row identity, computed once at ingest and never recomputed, so editing a row and
 re-importing the same PDF never duplicates it. Exact duplicate lines inside a PDF
 collapse to one row.
 
+## Review checks — nothing counts until it passes or a person clears it
+
+`checks.py` runs **on every load** (inside `data.frame()`), whatever path a report
+came in by, and never changes a report — it raises flags:
+
+| flag | rule | suggested fix |
+|---|---|---|
+| `range` | corn outside 50–300 bpa, soybeans under 10 | — |
+| `corn?` | soybeans over 100 bpa (corn filed under the soybean header) | crop → Corn |
+| `reread` | today's parser reads a different yield or LY from the stored text | the fresh reading |
+| `duplicate` | same year, crop, state, place (`data.loc_key`) and yield as another row | — |
+
+A person decides on **Review & edit → Needs review**: apply the fix, approve as it
+is, keep both (duplicates), exclude, or edit by hand. Decisions live in
+`REVIEW_DECISIONS` (its own table — the service login can create it, and
+`YIELD_OBSERVATIONS` never changes shape): `approved` covers the flags it was given
+for (a new flag later asks again); `excluded` stays in the archive but out of every
+average; `superseded` means replaced by other rows and is hidden everywhere
+(`data.load_all()` drops it). Explore counts only `clean` + `approved`; Report text
+shows every live report. A hand edit in the table records an approval for
+`reread`, so the parser never suggests undoing it. Nothing in the review path
+deletes a row.
+
+`python reimport_pdfs.py --target sqlite|snowflake [--apply]` re-reads the PDFs and
+splits rows the parser used to glue together (dry run by default): parts are
+inserted, carrying the old row's date/email/notes, and the old row is marked
+`superseded` with the new hashes in its note. A second run finds nothing. (What
+the first run did, and what the checks found, is in `CLAUDE.local.md`.)
+
 ## Variety trials — the second archive
 
 **Variety trials** shows what the state universities published at each test plot, so a
@@ -79,17 +108,26 @@ The full original text is always kept in `raw_text`.
 A report line mixes this year's yield, last year's, the expectation, and
 differences. `extract_yields` classifies every number. **`python
 tests/test_parsing.py` after any change to `parse_pdfs.py` or
-`data.find_match`** — made-up reports in the shapes the real ones take, plus the
-real-data file when present. Rules the cases pin down: a "last year" never
+`data.find_match`** (and `tests/test_checks.py` after touching `checks.py`) —
+made-up reports in the shapes the real ones take, plus the real-data file when
+present. Rules the cases pin down: a "last year" never
 attaches across a full stop or past another number; "above/better than last
 year" is a comparison, not last year's figure; "less/more than" is always a
 difference; a small number before "better/less than" is a difference; "expected
-N" makes N the expectation; same place with a different yield is a different
-report.
+N" makes N the expectation, but "better than expected N" makes N the yield; a
+"last year" that opens its own clause ("231, fwiw last year ... was 238") belongs
+to the next figure; "N bu higher YoY" / "N bu difference" is a change at any size;
+a date ("planted 4/12 – 241") or road ("Hwy 30- 66") is never the low end of a
+range; "160 A" is acres; same place with a different yield is a different report.
+PDF lines opening "Place Co, ST ..." or "Town, ST ..." (comma, no separator) start
+a report; "Polk Co – ..." with no state starts one in the previous report's state.
 
 Regex traps already hit: `\w*` backtracking past a negative lookahead (pin with
 `\b`); `(?![\d.])` also rejects a sentence-ending full stop (use
-`(?!\d)(?!\.\d)`); `r'\\s+'` inside a raw string is a literal backslash.
+`(?!\d)(?!\.\d)`); `r'\\s+'` inside a raw string is a literal backslash; a
+lookbehind `(?<![/\d.])` also rejects "vs.73" (use `(?<![/\d])(?<!\d\.)`); a
+DataFrame column named `flags` collides with `DataFrame.flags` (hence
+`review_flags`).
 
 ## Backend
 

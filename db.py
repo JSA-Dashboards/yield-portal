@@ -225,8 +225,8 @@ def _ddl():
 
 
 def init_db():
-    """Create the table locally. On Snowflake the database and table are created
-    once by snowflake_admin/setup.py, so app start does no DDL there."""
+    """Create the tables locally. On Snowflake they are created once by
+    snowflake_admin/setup.py, so app start does no DDL there."""
     if use_snowflake():
         return
     conn, _ = _connect()
@@ -235,6 +235,7 @@ def init_db():
         conn.commit()
     finally:
         conn.close()
+    ensure_review_table()
 
 
 # --- helpers ----------------------------------------------------------------
@@ -401,5 +402,111 @@ def count_rows():
         cur = conn.cursor()
         cur.execute(f"SELECT COUNT(*) FROM {TABLE}")
         return cur.fetchone()[0]
+    finally:
+        conn.close()
+
+
+# --- review decisions ---------------------------------------------------------
+# What a person decided about a flagged report (checks.py raises the flags on
+# every load). Its own table, so YIELD_OBSERVATIONS never changes shape and the
+# portal's service login (which may create tables but not alter this one) can
+# make it. A report with no row here has never been decided on.
+#   approved   counts in averages despite the flags listed in `flags`
+#   excluded   stays in the archive, never in averages
+#   superseded replaced by other rows (e.g. a merged PDF line split in two);
+#              hidden everywhere but the audit trail
+REVIEW_TABLE = "REVIEW_DECISIONS"
+DECISIONS = ("approved", "excluded", "superseded")
+REVIEW_COLUMNS = [
+    ("dedup_hash", "VARCHAR(32) NOT NULL PRIMARY KEY"),
+    ("decision", "VARCHAR(16) NOT NULL"),
+    ("flags", "VARCHAR(200)"),
+    ("note", "VARCHAR(1000)"),
+    ("decided_by", "VARCHAR(60)"),
+    ("decided_at", "TIMESTAMP"),
+]
+_REVIEW_NAMES = [c for c, _ in REVIEW_COLUMNS]
+
+
+def ensure_review_table():
+    """Create REVIEW_DECISIONS if it isn't there (either backend; idempotent)."""
+    cols = ",\n    ".join(f"{c} {t}" for c, t in REVIEW_COLUMNS)
+    conn, _ = _connect()
+    try:
+        conn.cursor().execute(f"CREATE TABLE IF NOT EXISTS {REVIEW_TABLE} (\n    {cols}\n)")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _read_decisions(cur):
+    try:
+        cur.execute(f"SELECT {', '.join(_REVIEW_NAMES)} FROM {REVIEW_TABLE}")
+    except Exception as exc:
+        if "does not exist" in str(exc).lower() or "no such table" in str(exc).lower():
+            return {}
+        raise
+    names = [d[0].lower() for d in cur.description]
+    return {row[0]: dict(zip(names, row)) for row in cur.fetchall()}
+
+
+def fetch_decisions():
+    """{dedup_hash: {decision, flags, note, decided_by, decided_at}}; empty when
+    the table doesn't exist yet (a fresh deployment)."""
+    conn, _ = _connect()
+    try:
+        return _read_decisions(conn.cursor())
+    finally:
+        conn.close()
+
+
+def fetch_all_and_decisions():
+    """fetch_all() and fetch_decisions() over one connection (one Snowflake
+    login, not two, on every page load)."""
+    conn, _ = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"SELECT {', '.join(COL_NAMES)} FROM {TABLE}")
+        names = [d[0].lower() for d in cur.description]
+        rows = [dict(zip(names, row)) for row in cur.fetchall()]
+        return rows, _read_decisions(cur)
+    finally:
+        conn.close()
+
+
+def set_decision(dedup_hash, decision, flags=(), note=None, decided_by=None):
+    """Record (or replace) the decision on one report."""
+    if decision not in DECISIONS:
+        raise ValueError(f"decision must be one of {DECISIONS}")
+    row = (dedup_hash, decision, ", ".join(flags) or None, _clean(note),
+           _clean(decided_by) or "portal", _now())
+    conn, ph = _connect()
+    try:
+        cur = conn.cursor()
+        marks = ", ".join([ph] * len(_REVIEW_NAMES))
+        if use_snowflake():
+            cur.execute(
+                f"MERGE INTO {REVIEW_TABLE} t USING (SELECT {marks}) "
+                f"s ({', '.join(_REVIEW_NAMES)}) ON t.dedup_hash = s.dedup_hash "
+                f"WHEN MATCHED THEN UPDATE SET "
+                + ", ".join(f"{c} = s.{c}" for c in _REVIEW_NAMES[1:])
+                + f" WHEN NOT MATCHED THEN INSERT ({', '.join(_REVIEW_NAMES)}) "
+                f"VALUES ({', '.join('s.' + c for c in _REVIEW_NAMES)})", row)
+        else:
+            cur.execute(f"INSERT OR REPLACE INTO {REVIEW_TABLE} ({', '.join(_REVIEW_NAMES)}) "
+                        f"VALUES ({marks})", row)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_decision(dedup_hash):
+    """Undo a decision: the report goes back to whatever the checks say."""
+    conn, ph = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"DELETE FROM {REVIEW_TABLE} WHERE dedup_hash = {ph}", (dedup_hash,))
+        conn.commit()
+        return cur.rowcount
     finally:
         conn.close()
