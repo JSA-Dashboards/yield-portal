@@ -14,9 +14,12 @@ re-importing the same PDF cannot create a duplicate. Imports only ever insert
 rows whose hash is new; they never overwrite an existing (possibly edited) row.
 """
 import datetime as _dt
+import functools
 import os
 import pathlib
 import sqlite3
+import threading
+import uuid
 
 HERE = pathlib.Path(__file__).resolve().parent
 LOCAL_SQLITE = HERE / "yield_portal.db"
@@ -122,8 +125,10 @@ def _load_private_key():
 
 
 class _KeptOpen:
-    """A browser-sign-in connection shared for the life of the process, so a
-    script signs in once rather than once per query; close() leaves it open."""
+    """A Snowflake connection shared for the life of the process, so the app logs
+    in once instead of once per query (a login costs 2-3 s; the query itself well
+    under 1 s). close() leaves it open. Every caller takes its own cursor, which
+    the connector allows across threads."""
 
     def __init__(self, conn):
         self.raw = conn
@@ -142,6 +147,31 @@ class _KeptOpen:
 
 
 _SHARED = {}
+_SHARED_LOCK = threading.Lock()
+
+
+def _dead_session(exc) -> bool:
+    """A Snowflake error that means the shared session is gone, not the query."""
+    msg = str(exc).lower()
+    return any(s in msg for s in ("session no longer exists", "token has expired",
+                                  "connection is closed", "session expired", "390111",
+                                  "390112", "390114", "250002"))
+
+
+def _retry_once(fn):
+    """Run fn; if the shared Snowflake session died under it, log in again and
+    run it once more. (A dead session ran nothing, so a write is safe to redo.)"""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            if not (use_snowflake() and _dead_session(exc)):
+                raise
+            with _SHARED_LOCK:
+                _SHARED.clear()
+            return fn(*args, **kwargs)
+    return wrapper
 
 
 def sf_connect(database=SF_DATABASE, schema=SF_SCHEMA):
@@ -198,18 +228,26 @@ def sf_connect(database=SF_DATABASE, schema=SF_SCHEMA):
         schema=schema or None,
         login_timeout=30,
         network_timeout=60,
+        client_session_keep_alive=True,    # the shared session outlives a quiet hour
     )
-    pkey = _load_private_key()
-    if pkey is not None:
-        kw["private_key"] = pkey
-    else:
-        kw["password"] = os.environ.get("SNOWFLAKE_PASSWORD") or None
-    conn = sc.connect(**{k: v for k, v in kw.items() if v is not None})
-    try:
-        conn._paramstyle = "pyformat"   # %s binding, same as the SQLite path's ?
-    except Exception:
-        pass
-    return conn
+    key = ("env",) + tuple(kw[k] for k in ("account", "user", "role", "warehouse",
+                                           "database", "schema"))
+    with _SHARED_LOCK:
+        held = _SHARED.get(key)
+        if held is not None and not held.raw.is_closed():
+            return held
+        pkey = _load_private_key()
+        if pkey is not None:
+            kw["private_key"] = pkey
+        else:
+            kw["password"] = os.environ.get("SNOWFLAKE_PASSWORD") or None
+        conn = sc.connect(**{k: v for k, v in kw.items() if v is not None})
+        try:
+            conn._paramstyle = "pyformat"   # %s binding, same as the SQLite path's ?
+        except Exception:
+            pass
+        _SHARED[key] = _KeptOpen(conn)
+        return _SHARED[key]
 
 
 def _connect():
@@ -270,6 +308,7 @@ def _row_tuple(rec):
 
 
 # --- writes -----------------------------------------------------------------
+@_retry_once
 def insert_new(records):
     """Insert records whose dedup_hash isn't stored yet; skip the rest.
     Never overwrites an existing row. -> (inserted, skipped)."""
@@ -300,14 +339,17 @@ def insert_new(records):
         if use_snowflake():
             # Stage into a temp table, then MERGE: insert only unseen hashes even
             # if another session added some since existing_hashes() ran.
-            cur.execute(f"CREATE TEMPORARY TABLE _yo_stage LIKE {TABLE}")
-            cur.executemany(f"INSERT INTO _yo_stage ({cols}) VALUES ({marks})", rows)
+            # a name of its own: the session is shared, and two imports at once
+            # must not stage into the same temp table
+            stage = f"_yo_stage_{uuid.uuid4().hex[:10]}"
+            cur.execute(f"CREATE TEMPORARY TABLE {stage} LIKE {TABLE}")
+            cur.executemany(f"INSERT INTO {stage} ({cols}) VALUES ({marks})", rows)
             cur.execute(
-                f"MERGE INTO {TABLE} t USING _yo_stage s "
+                f"MERGE INTO {TABLE} t USING {stage} s "
                 f"ON t.dedup_hash = s.dedup_hash "
                 f"WHEN NOT MATCHED THEN INSERT ({cols}) VALUES "
                 f"({', '.join('s.' + c for c in COL_NAMES)})")
-            cur.execute("DROP TABLE IF EXISTS _yo_stage")
+            cur.execute(f"DROP TABLE IF EXISTS {stage}")
         else:
             cur.executemany(
                 f"INSERT INTO {TABLE} ({cols}) VALUES ({marks}) "
@@ -318,6 +360,7 @@ def insert_new(records):
     return len(fresh), len(records) - len(fresh)
 
 
+@_retry_once
 def update_row(dedup_hash, changes):
     """Apply portal edits to one row. Only EDITABLE fields are accepted."""
     changes = {k: v for k, v in changes.items() if k in EDITABLE}
@@ -337,6 +380,7 @@ def update_row(dedup_hash, changes):
         conn.close()
 
 
+@_retry_once
 def set_reported(dedup_hash, date_reported, email_subject=None, email_id=None):
     """Stamp the date an observation was reported (from its matching email)."""
     conn, ph = _connect()
@@ -352,6 +396,7 @@ def set_reported(dedup_hash, date_reported, email_subject=None, email_id=None):
         conn.close()
 
 
+@_retry_once
 def delete_row(dedup_hash):
     conn, ph = _connect()
     try:
@@ -364,6 +409,7 @@ def delete_row(dedup_hash):
 
 
 # --- reads ------------------------------------------------------------------
+@_retry_once
 def existing_hashes(hashes):
     """Subset of `hashes` already stored."""
     if not hashes:
@@ -384,6 +430,7 @@ def existing_hashes(hashes):
         conn.close()
 
 
+@_retry_once
 def fetch_all():
     """Every observation as a list of dicts (lower-case keys on both engines)."""
     conn, _ = _connect()
@@ -396,6 +443,7 @@ def fetch_all():
         conn.close()
 
 
+@_retry_once
 def count_rows():
     conn, _ = _connect()
     try:
@@ -428,6 +476,7 @@ REVIEW_COLUMNS = [
 _REVIEW_NAMES = [c for c, _ in REVIEW_COLUMNS]
 
 
+@_retry_once
 def ensure_review_table():
     """Create REVIEW_DECISIONS if it isn't there (either backend; idempotent)."""
     cols = ",\n    ".join(f"{c} {t}" for c, t in REVIEW_COLUMNS)
@@ -450,6 +499,7 @@ def _read_decisions(cur):
     return {row[0]: dict(zip(names, row)) for row in cur.fetchall()}
 
 
+@_retry_once
 def fetch_decisions():
     """{dedup_hash: {decision, flags, note, decided_by, decided_at}}; empty when
     the table doesn't exist yet (a fresh deployment)."""
@@ -460,6 +510,7 @@ def fetch_decisions():
         conn.close()
 
 
+@_retry_once
 def fetch_all_and_decisions():
     """fetch_all() and fetch_decisions() over one connection (one Snowflake
     login, not two, on every page load)."""
@@ -474,6 +525,7 @@ def fetch_all_and_decisions():
         conn.close()
 
 
+@_retry_once
 def set_decision(dedup_hash, decision, flags=(), note=None, decided_by=None):
     """Record (or replace) the decision on one report."""
     if decision not in DECISIONS:
@@ -500,6 +552,7 @@ def set_decision(dedup_hash, decision, flags=(), note=None, decided_by=None):
         conn.close()
 
 
+@_retry_once
 def clear_decision(dedup_hash):
     """Undo a decision: the report goes back to whatever the checks say."""
     conn, ph = _connect()

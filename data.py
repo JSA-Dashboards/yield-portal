@@ -26,11 +26,25 @@ NUMERIC = ["yield_bpa", "yield_min", "yield_max", "ly_yield", "expected_yield", 
 
 
 @st.cache_data(ttl=600, show_spinner="Loading reports…")
+def _reports() -> pd.DataFrame:
+    """Every report, typed (cached apart from the decisions: approving one
+    doesn't change any report, so it shouldn't re-read them all)."""
+    return _typed(db.fetch_all())
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _decisions() -> dict:
+    return db.fetch_decisions()
+
+
+@st.cache_data(ttl=600, show_spinner=False)
 def load_all() -> pd.DataFrame:
-    """Every live observation (cached for the pages): superseded rows (replaced
-    by others, e.g. a merged PDF line that was split) are dropped. The table is
-    small (~1-2k rows), so pages load it once and filter in memory."""
-    df = frame()
+    """Every live observation with its review checks (cached for the pages):
+    superseded rows (replaced by others, e.g. a merged PDF line that was split)
+    are dropped. The table is small (~1-2k rows), so pages load it once and
+    filter in memory."""
+    import checks                  # here, not at the top: checks imports this module
+    df = checks.run(_reports(), _decisions())
     return df[df["status"] != "superseded"].reset_index(drop=True)
 
 
@@ -38,8 +52,13 @@ def frame() -> pd.DataFrame:
     """Every observation, typed, plus derived columns and the review checks
     (checks.run: review_flags, suggestion, status, in_analysis) — uncached, for scripts.
     Superseded rows are included; callers that match or display drop them."""
-    import checks                  # here, not at the top: checks imports this module
+    import checks
     rows, decisions = db.fetch_all_and_decisions()
+    return checks.run(_typed(rows), decisions)
+
+
+def _typed(rows) -> pd.DataFrame:
+    """Database rows -> typed frame plus vs_ly / vs_aph."""
     df = pd.DataFrame(rows, columns=db.COL_NAMES)
     for c in NUMERIC:
         df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -54,11 +73,21 @@ def frame() -> pd.DataFrame:
         df[c] = df[c].map(lambda v: bool(v) if pd.notna(v) else False)
     df["vs_ly"] = df["yield_bpa"] - df["ly_yield"]
     df["vs_aph"] = df["yield_bpa"] - df["aph"]
-    return checks.run(df, decisions)
+    return df
 
 
 def invalidate():
-    """Call after any write so every page sees it on the next rerun."""
+    """Call after a write that changes reports (import, edit, fix): every page
+    re-reads them on the next rerun."""
+    _reports.clear()
+    _decisions.clear()
+    load_all.clear()
+
+
+def invalidate_decisions():
+    """Call after a review decision alone (approve, exclude, keep both): the
+    reports didn't change, so only the decisions are re-read."""
+    _decisions.clear()
     load_all.clear()
 
 

@@ -33,9 +33,14 @@ def _who():
     return (st.session_state.get("rev_who") or "").strip() or "portal"
 
 
-def _done(message):
-    """After any write: fresh data, a new (unselected) queue table, a note."""
-    data.invalidate()
+def _done(message, reports_changed=False):
+    """After any write: fresh data, a new (unselected) queue table, a note. A
+    decision alone re-reads just the decisions (~0.4 s); a changed report
+    re-reads the reports too."""
+    if reports_changed:
+        data.invalidate()
+    else:
+        data.invalidate_decisions()
     st.session_state["rev_gen"] = st.session_state.get("rev_gen", 0) + 1
     st.session_state["rev_flash"] = message
     st.rerun()
@@ -135,7 +140,7 @@ if mode == "queue":
                 for r in fixable.to_dict("records"):
                     db.update_row(r["dedup_hash"], r["suggestion"])
                     _approve(r, r["review_flags"], "suggested fix applied (bulk)")
-                _done(f"Applied {len(fixable)} suggested fixes.")
+                _done(f"Applied {len(fixable)} suggested fixes.", reports_changed=True)
 
     table = queue.assign(
         place=queue.apply(_place, axis=1),
@@ -180,7 +185,7 @@ if mode == "queue":
                 if st.button("Apply fix", type="primary", icon=":material/auto_fix_high:"):
                     db.update_row(r["dedup_hash"], r["suggestion"])
                     _approve(r, r["review_flags"], "suggested fix applied")
-                    _done("Fix applied and approved.")
+                    _done("Fix applied and approved.", reports_changed=True)
             if len(others):
                 if st.button("Keep both: different reports", icon=":material/call_split:"):
                     for o in [r] + others.to_dict("records"):
@@ -216,7 +221,7 @@ if mode == "queue":
                                                     "location": location or None,
                                                     "yield_bpa": yld, "ly_yield": ly, "aph": aph})
                     _approve(r, set(r["review_flags"]) | {"reread"}, "edited by hand in review")
-                    _done("Saved and approved.")
+                    _done("Saved and approved.", reports_changed=True)
     st.stop()
 
 # --- every report, for hand edits ---------------------------------------------------
