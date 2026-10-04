@@ -10,3 +10,6 @@ __pycache__/
 # real report text: kept on the desk only (the repo is public)
 tests/*_local.py
 CLAUDE.local.md
+
+# the scheduled email sync writes here (may quote report text)
+logs/

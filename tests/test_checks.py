@@ -85,6 +85,13 @@ check("a superseded twin no longer makes a duplicate", decided.loc[6, "review_fl
 check("describe a fix", checks.describe_fix({"crop": "Corn", "yield_bpa": 247.0, "ly_yield": None}),
       "crop → Corn, yield → 247, last year → —")
 
+# --- an email nobody could place ------------------------------------------------------
+lost = row("Running about 210 bpa so far.", crop=None, state=None, location=None)
+out_lost = checks.run(pd.DataFrame([lost, rows[0]]), {})
+check("no crop or state: 'incomplete', out of averages until set",
+      (out_lost.loc[0, "review_flags"], out_lost.loc[0, "status"], bool(out_lost.loc[0, "in_analysis"])),
+      (["incomplete"], "flagged", False))
+
 # --- a report with both crops -------------------------------------------------------
 both = row("Story Co, IA: Corn running 205 bu/ac vs 215 target. First beans went 61 bu/ac "
            "vs 55 LY.", crop="Soybeans", state="IA", location="Story Co", notes="from a call")

@@ -3,6 +3,7 @@ Date the archive from the report emails, in bulk.
 
     python match_emails.py --target sqlite            # dry run: report only
     python match_emails.py --target sqlite --apply    # write it
+    pythonw match_emails.py --target snowflake --auto # the scheduled task (no console)
 
 Reads every Ag Trader Talk yield email Outlook has cached (Inbox, Deleted Items, Archive)
 over COM, parses each one exactly like the Add reports page, and for each report
@@ -11,10 +12,16 @@ in it:
           subject and Message-ID on that row
   dated   archive has it with this date or earlier -> nothing to do
   new     not in the archive -> add it, dated
-  review  no crop or no state could be read -> listed for Add reports instead
-          of being guessed
+  review  no crop or no state could be read -> stored without them (when
+          writing), so it waits on Review & edit as "Needs crop/state"
 Emails run oldest first, so the first report date wins; an email whose
 Message-ID is already on a row is skipped, so re-running is safe.
+
+--auto is what the Windows scheduled task "Yield Portal - email sync" runs every
+30 minutes on Kolten's PC: it writes, sends all output to logs/email_sync.log,
+and records each run in EMAIL_SYNC_RUNS so Review & edit can show when the emails
+were last checked. The task runs only while he's logged in (Outlook COM needs
+his session); a missed run is caught up on the next one.
 
 Outlook COM only sees its Cached Exchange window — mail older than that, or not
 yet synced, is invisible here (see the reference_outlook_cache_window memory).
@@ -24,7 +31,9 @@ import collections
 import datetime as dt
 import os
 import pathlib
+import socket
 import sys
+import traceback
 
 HERE = pathlib.Path(__file__).resolve().parent
 try:
@@ -32,6 +41,22 @@ try:
     load_dotenv(HERE / ".env", override=True)
 except ModuleNotFoundError:
     pass
+
+LOG = HERE / "logs" / "email_sync.log"
+
+
+def _to_log():
+    """Unattended runs (pythonw, no console) write everything to logs/email_sync.log;
+    a log past 1 MB is kept once as .old."""
+    LOG.parent.mkdir(exist_ok=True)
+    if LOG.exists() and LOG.stat().st_size > 1_000_000:
+        LOG.replace(LOG.with_suffix(".log.old"))
+    sys.stdout = sys.stderr = open(LOG, "a", encoding="utf-8", buffering=1)
+    print(f"\n===== {dt.datetime.now():%Y-%m-%d %H:%M:%S} on {socket.gethostname()}")
+
+
+if "--auto" in sys.argv:          # before Streamlit is imported: its warnings land in the log
+    _to_log()
 
 import pandas as pd  # noqa: E402
 
@@ -97,8 +122,30 @@ def main():
     ap.add_argument("--connection",
                     help="Snowflake profile in ~/.snowflake/connections.toml")
     ap.add_argument("--apply", action="store_true", help="write (default: dry run)")
+    ap.add_argument("--auto", action="store_true",
+                    help="unattended (the scheduled task): writes, logs to logs/email_sync.log "
+                         "and records the run for the portal")
     ap.add_argument("--msg", nargs="*", default=[], help="also read these saved .msg files")
     args = ap.parse_args()
+    if not args.auto:
+        return run(args)
+    args.apply = True
+    try:
+        tally = run(args)
+        db.record_sync_run(socket.gethostname(), emails=tally.get("emails", 0),
+                           dated=tally.get("date", 0), added=tally.get("new", 0),
+                           needs_review=tally.get("review", 0))
+    except Exception as exc:
+        traceback.print_exc()
+        try:
+            db.record_sync_run(socket.gethostname(), error=f"{type(exc).__name__}: {exc}")
+        except Exception:
+            traceback.print_exc()
+        sys.exit(1)
+
+
+def run(args):
+    """One pass over the emails. -> the tally (emails, date, dated, new, review)."""
     if args.target == "snowflake":
         os.environ["USE_SNOWFLAKE"] = "1"
         if args.connection:
@@ -119,7 +166,7 @@ def main():
     print(f"{len(emails)} Ag Trader Talk emails "
           f"({dict(collections.Counter(e['folder'] for e in emails))})\n")
 
-    tally, review = collections.Counter(), []
+    tally, review = collections.Counter(emails=len(emails)), []
     for e in emails:
         if e["msgid"] in applied:
             tally["email already applied"] += 1
@@ -154,18 +201,25 @@ def main():
                     db.insert_new([r])
                 print(f"      {act:6} {_desc(r)}")
             else:
+                # no crop or no state: stored anyway, so it waits on Review & edit as
+                # "Needs crop/state" instead of being lost in a log
                 act = "review"
                 review.append((e, r))
+                r["email_id"] = e["msgid"]
+                if args.apply:
+                    db.insert_new([r])
                 print(f"      {act:6} {_desc(r)}  ({r['raw_text'][:60]})")
             tally[act] += 1
 
     print("\nSUMMARY:", dict(tally))
     if review:
-        print(f"\n{len(review)} report(s) need a crop or state — paste these on Add reports:")
+        print(f"\n{len(review)} report(s) need a crop or state"
+              + (" — they wait on Review & edit:" if args.apply else ":"))
         for e, r in review:
             print(f"  {e['received']:%Y-%m-%d}  {e['subject'][:50]}  |  {r['raw_text'][:80]}")
     if not args.apply:
         print("\nDry run — nothing written. Re-run with --apply to write.")
+    return tally
 
 
 if __name__ == "__main__":

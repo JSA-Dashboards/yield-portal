@@ -1,7 +1,9 @@
 """Review & edit — the review queue (reports the checks flagged) and the full
 table for hand edits."""
+import datetime as dt
 import hashlib
 
+import pandas as pd
 import streamlit as st
 
 import checks
@@ -16,13 +18,43 @@ STATES = sorted(P.ABBRS)
 EDIT_COLS = ["crop_year", "date_reported", "crop", "state", "location", "yield_bpa",
              "yield_min", "yield_max", "ly_yield", "expected_yield", "aph", "maturity",
              "irrigation", "disease", "is_silage", "is_record", "raw_text", "notes"]
-SHORT = {"split": "Two crops", "duplicate": "Possible duplicate", "corn?": "Probably corn",
+SHORT = {"incomplete": "Needs crop/state", "split": "Two crops", "duplicate": "Possible duplicate", "corn?": "Probably corn",
          "reread": "Parser reads it differently", "range": "Out of range"}
 STATUS = {"clean": "", "flagged": "Needs review", "approved": "Approved", "excluded": "Excluded"}
 
 st.title("Review & edit")
 if msg := st.session_state.pop("rev_flash", None):
     st.success(msg, icon=":material/check_circle:")
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _last_sync():
+    try:
+        return db.last_sync_run()
+    except Exception:
+        return None
+
+
+def _sync_note():
+    """When the scheduled email pickup last ran, and what it brought in."""
+    last = _last_sync()
+    if not last:
+        return
+    now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    mins = (now - pd.Timestamp(last["run_at"]).to_pydatetime()).total_seconds() / 60
+    ago = (f"{int(mins)} min ago" if mins < 90 else f"{mins / 60:.0f} h ago" if mins < 2880
+           else f"{mins / 1440:.0f} days ago")
+    if last["error"]:
+        st.warning(f"The email pickup on {last['host']} failed {ago}: {last['error']}. "
+                   "It tries again every 30 minutes.", icon=":material/mail:")
+        return
+    need = f", {last['needs_review']} need a crop/state" if last["needs_review"] else ""
+    late = "" if mins < 180 else " The PC may be off; it catches up when it's back on."
+    st.caption(f":material/mark_email_read: Ag Trader Talk emails checked {ago} on "
+               f"{last['host']}: {last['added']} new, {last['dated']} dated{need}.{late}")
+
+
+_sync_note()
 
 df = data.load_all()
 if df.empty:

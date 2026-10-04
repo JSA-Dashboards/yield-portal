@@ -454,6 +454,52 @@ def count_rows():
         conn.close()
 
 
+# --- automatic email pickup ------------------------------------------------------
+# One row per run of `match_emails.py --auto` (a scheduled task on Kolten's PC), so
+# the portal can say when the emails were last checked and what came in.
+SYNC_TABLE = "EMAIL_SYNC_RUNS"
+_SYNC_COLUMNS = [("run_at", "TIMESTAMP"), ("host", "VARCHAR(60)"), ("emails", "INTEGER"),
+                 ("dated", "INTEGER"), ("added", "INTEGER"), ("needs_review", "INTEGER"),
+                 ("error", "VARCHAR(1000)")]
+
+
+@_retry_once
+def record_sync_run(host, emails=0, dated=0, added=0, needs_review=0, error=None):
+    """Log one email-sync run (run_at in UTC)."""
+    cols = ", ".join(c for c, _ in _SYNC_COLUMNS)
+    conn, ph = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"CREATE TABLE IF NOT EXISTS {SYNC_TABLE} ("
+                    + ", ".join(f"{c} {t}" for c, t in _SYNC_COLUMNS) + ")")
+        now = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None, microsecond=0)
+        cur.execute(f"INSERT INTO {SYNC_TABLE} ({cols}) VALUES ({', '.join([ph] * len(_SYNC_COLUMNS))})",
+                    (now.isoformat(sep=" "), host, emails, dated, added, needs_review,
+                     (error or "")[:1000] or None))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@_retry_once
+def last_sync_run():
+    """The latest email-sync run as a dict (run_at is UTC), or None."""
+    conn, _ = _connect()
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute(f"SELECT {', '.join(c for c, _ in _SYNC_COLUMNS)} FROM {SYNC_TABLE} "
+                        f"ORDER BY run_at DESC LIMIT 1")
+        except Exception as exc:
+            if "does not exist" in str(exc).lower() or "no such table" in str(exc).lower():
+                return None
+            raise
+        row = cur.fetchone()
+        return dict(zip([c for c, _ in _SYNC_COLUMNS], row)) if row else None
+    finally:
+        conn.close()
+
+
 # --- review decisions ---------------------------------------------------------
 # What a person decided about a flagged report (checks.py raises the flags on
 # every load). Its own table, so YIELD_OBSERVATIONS never changes shape and the
