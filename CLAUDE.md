@@ -325,6 +325,33 @@ Markdown table, not `st.table`: `st.table` caps a Markdown cell at 400px, which
 squeezes paragraphs into a narrow column. Run `python tests/test_report_text.py`
 after changes.
 
+## Weekly email
+
+`weekly_email.py` builds the Tuesday-morning email for the JSA group: for the
+current crop year, per crop, Explore's headline tiles (`data.headline`, with %
+changes) and two charts (yields by crop year; average by state, this year vs last;
+Altair → PNG with `vl-convert-python`, embedded as `cid:` attachments). A yellow
+"New this week" box at the top lists the reports dated in the past week, and
+the season's report text follows (laid out like Report text), with those reports
+highlighted in yellow. "The past week" is the seven days before the send day
+(Tue–Mon), so each report date lands in exactly one email. Tiles and charts count
+what Explore counts; the text holds everything but superseded / excluded rows.
+
+- `python weekly_email.py --preview [--today YYYY-MM-DD]` writes
+  `logs/weekly_preview.html` (images inline) and sends nothing.
+- `python weekly_email.py --to <address>` sends now (a test).
+- The scheduled task **"Yield Portal - weekly email"** on Kolten's PC runs
+  `pythonw weekly_email.py --to <group> --scheduled`. The recipient lives on the
+  task's command line, not in this public repo. `--scheduled` logs to
+  `logs/weekly_email.log` and sends at most once per ISO week
+  (`logs/weekly_email.json`), so a catch-up run after the PC was off doesn't
+  repeat it.
+- Sent through classic Outlook over COM, because Graph mail is blocked and SMTP
+  is refused. `.Send()` only queues it: in cached Exchange mode Outlook sends on
+  its own send/receive cycle, so the script waits up to 35 minutes for the
+  Outbox to drain (Morning Wire's lesson) and exits 2 if it's still queued.
+- `YIELD_PORTAL_URL` in `.env`, if set, adds a link to the portal in the footer.
+
 ## Charts
 
 Year colours are pinned (`data.YEAR_PALETTE`, newest year = JPSI blue) and
