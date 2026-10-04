@@ -175,7 +175,9 @@ present. Rules the cases pin down: a "last year" never
 attaches across a full stop or past another number; "above/better than last
 year" is a comparison, not last year's figure; "less/more than" is always a
 difference; a small number before "better/less than" is a difference; "expected
-N" makes N the expectation, but "better than expected N" makes N the yield; a
+N" and "thought it was / would be N" make N the expectation, but "better than
+expected N" or "than we thought N" make N the yield; "vs N target/budget" is the
+expectation; a
 "last year" that opens its own clause ("231, fwiw last year ... was 238") belongs
 to the next figure; "N bu higher YoY" / "N bu difference" is a change at any size;
 a date ("planted 4/12 – 241") or road ("Hwy 30- 66") is never the low end of a
