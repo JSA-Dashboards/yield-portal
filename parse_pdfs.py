@@ -200,9 +200,15 @@ LY_TAIL_RE = re.compile(
 _EXP_POST = re.compile(
     r"^\W{0,3}(expect\w*|estimat\w*|target\w*|budget\w*)\b"
     r"(?!\W{0,3}\d{2,3}(?:\.\d+)?(?!\d)(?!\.\d)(?!\s*%))", re.I)
-_EXP_PRE = re.compile(r"(expect\w*|hop\w* (?:for|to))\W{0,10}$", re.I)
-# ...but "better than expected 140 bpa" is a finished comparison: 140 is the yield.
-_EXP_DONE = re.compile(r"\b(?:than|as)\s+expected\W{0,3}$", re.I)
+# What the farmer thought it would make is an expectation too: "Producer a bit
+# surprised, thought it was 215" (the verb is optional here because a bare
+# "was 215" match starts at "was"; the context before it ends at "thought it").
+_THOUGHT = (r"(?:thought|figured|guessed)(?:\s+(?:it|they|we|he|she))?"
+            r"(?:\s+(?:was|were|would be|'d be|would make|would go|would run|might be|could be))?")
+_EXP_PRE = re.compile(r"(expect\w*|hop\w* (?:for|to)|%s)\W{0,10}$" % _THOUGHT, re.I)
+# ...but "better than expected 140 bpa" is a finished comparison: 140 is the
+# yield; so is "better than we thought 140 bpa".
+_EXP_DONE = re.compile(r"\b(?:than|as)\s+(?:expected|(?:\w+\s+)?thought)\W{0,3}$", re.I)
 # A "last year" right after a figure that opens its own clause belongs to the next
 # figure: in "estimate 231, fwiw last year silage estimate was 238", 238 is last
 # year's and 231 this year's; likewise "made 68, last year was 73".
@@ -239,7 +245,8 @@ BARE_YIELD_RE = re.compile(
 POST_AVG_RE = re.compile(r"(?<![\d.])(\d{2,3}(?:\.\d+)?)\s+(?:avg|ave|average)\b", re.I)
 # A bare expectation: "went 54.5 bpa, expected 42."
 EXP_NUM_RE = re.compile(
-    r"\bexpect(?:ed|ing|ation)?\s+(?:about\s+|around\s+)?(\d{2,3}(?:\.\d+)?)"
+    r"\b(?:expect(?:ed|ing|ation)?|(?:thought|figured)\s+(?:it|they)\s+"
+    r"(?:was|were|would be|'d be|would make))\s+(?:about\s+|around\s+)?(\d{2,3}(?:\.\d+)?)"
     r"(?!\d)(?!\.\d)(?!\s*%)", re.I)
 # Location then a bare figure, nothing between: "Mitchell Co IA 248" (emailed lists).
 LEAD_NUMBER_RE = re.compile(

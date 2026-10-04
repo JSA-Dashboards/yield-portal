@@ -163,6 +163,14 @@ check("a stated farm average speaks for a report with several fields",
 check("...but not one that belongs to another place run into the line",
       yields("Polk Co, IA 140 acres @ 220 bpa vs 230 last year. E KS whole farm average "
              "of 190 bu/ac")[0][0], 220)
+check("'thought it was 215' is what the farmer expected, not the yield",
+      yields("Polk Co, IA: 60 acres. Producer a bit surprised, thought it was 215.")[::2], ([], [215]))
+check("...also next to a real yield",
+      yields("Polk Co, IA: made 240 bpa, thought it was 215 going in.")[::2], ([240], [215]))
+check("'thought it would be 210' is the expectation",
+      yields("Polk Co, IA: 236 bpa. He thought it would be 210.")[::2], ([236], [210]))
+check("'better than we thought 245 bpa' — 245 is the yield",
+      yields("Polk Co, IA: better than we thought 245 bpa.")[0], [245])
 check("'vs 165 bu/ac target' is the expectation, not a yield",
       yields("Running about 150 bu/ac vs 165 bu/ac target.")[::2], ([150], [165]))
 
