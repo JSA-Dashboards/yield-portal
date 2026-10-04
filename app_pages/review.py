@@ -41,13 +41,40 @@ def _done(message):
     st.rerun()
 
 
+FIX_CLEARS = {"corn?", "reread"}        # the flags a suggested fix answers
+
+
+def _approve_many(rows, clear, note):
+    """Approve reports for the given checks (a list, or a function of the row),
+    keeping what each had approved before. An excluded report stays excluded (a
+    hand edit doesn't bring it back). One connection for the lot."""
+    items = []
+    for r in rows:
+        if r.get("decision") == "excluded":
+            continue
+        add = clear(r) if callable(clear) else clear
+        items.append((r["dedup_hash"], "approved",
+                      sorted(set(r["approved_flags"]) | set(add)), note, _who()))
+    db.set_decisions(items)
+
+
 def _approve(r, clear, note):
-    """Approve a report for the given checks, keeping what was approved before.
-    An excluded report stays excluded (a hand edit doesn't bring it back)."""
-    if r.get("decision") == "excluded":
-        return
-    keep = sorted(set(r["approved_flags"]) | set(clear))
-    db.set_decision(r["dedup_hash"], "approved", keep, note, _who())
+    _approve_many([r], clear, note)
+
+
+def _apply_fixes(rows, note):
+    """Write each report's suggested fix and approve what the fix answers. Any
+    other flag (a duplicate, a yield still out of range) is checked again on the
+    next load, so the report comes back if it still needs a look. -> count."""
+    rows = [r for r in rows if r["suggestion"]]
+    db.update_rows([(r["dedup_hash"], r["suggestion"]) for r in rows])
+    _approve_many(rows, lambda r: FIX_CLEARS & set(r["review_flags"]), note)
+    return len(rows)
+
+
+def _exclude_many(rows, note):
+    db.set_decisions([(r["dedup_hash"], "excluded", r["review_flags"], note, _who())
+                      for r in rows])
 
 
 def _place(r):
@@ -123,27 +150,13 @@ if mode == "queue":
     queue = queue.sort_values(["crop_year", "state", "location"], ascending=[False, True, True],
                               na_position="last").reset_index(drop=True)
 
-    fixable = queue[queue["suggestion"].notna()
-                    & queue["review_flags"].map(lambda f: set(f) <= {"corn?", "reread"})]
-    if len(fixable):
-        with st.expander(f"Apply all {len(fixable)} suggested fixes in this list"):
-            st.caption("Only reports whose every flag comes with a fix (probably corn, parser "
-                       "re-reads). Each gets its fix and is approved. Look the list over first.")
-            ok = st.checkbox("I've checked the suggested fixes below", key="rev_bulk_ok")
-            if st.button(f"Apply {len(fixable)} fixes", icon=":material/done_all:",
-                         disabled=not ok):
-                for r in fixable.to_dict("records"):
-                    db.update_row(r["dedup_hash"], r["suggestion"])
-                    _approve(r, r["review_flags"], "suggested fix applied (bulk)")
-                _done(f"Applied {len(fixable)} suggested fixes.")
-
     table = queue.assign(
         place=queue.apply(_place, axis=1),
         checks=queue["review_flags"].map(lambda f: ", ".join(SHORT[k] for k in f)),
         fix=queue["suggestion"].map(checks.describe_fix),
     )[["crop_year", "crop", "place", "yield_bpa", "checks", "fix", "raw_text"]]
     event = st.dataframe(
-        table, hide_index=True, height=320, on_select="rerun", selection_mode="single-row",
+        table, hide_index=True, height=320, on_select="rerun", selection_mode="multi-row",
         key=f"rev_queue_{st.session_state.get('rev_gen', 0)}",
         column_config={
             "crop_year": st.column_config.NumberColumn("Year", format="%d", width="small"),
@@ -154,12 +167,40 @@ if mode == "queue":
             "fix": "Suggested fix",
             "raw_text": st.column_config.TextColumn("Report", width="large"),
         })
-    rows = event.selection.rows
-    if not rows:
-        st.caption(":material/arrow_upward: Select a report to review it.")
+    picked = queue.iloc[event.selection.rows]
+    if picked.empty:
+        st.caption(":material/arrow_upward: Tick one report to review it, or several to fix, "
+                   "approve or exclude them together. The box in the header ticks every row "
+                   "shown; filter by check first to work through one kind at a time.")
         st.stop()
 
-    r = queue.iloc[rows[0]].to_dict()
+    if len(picked) > 1:
+        sel = picked.to_dict("records")
+        n_fix = sum(1 for r in sel if r["suggestion"])
+        with st.container(border=True):
+            st.markdown(f"**{len(sel)} reports ticked**")
+            st.caption(f"{n_fix} of them have a suggested fix (the Suggested fix column above). "
+                       "Applying fixes approves what each fix answers; anything else a report "
+                       "is flagged for (a duplicate, a yield still out of range) brings it back "
+                       "to the queue. Approving ticked duplicates together keeps them as "
+                       "separate reports.")
+            with st.container(horizontal=True):
+                if st.button(f"Apply {n_fix} suggested fixes", type="primary",
+                             icon=":material/auto_fix_high:", disabled=not n_fix):
+                    n = _apply_fixes(sel, "suggested fix applied (several at once)")
+                    _done(f"Applied {n} suggested fixes.")
+                if st.button(f"Approve {len(sel)} as they are", icon=":material/check:"):
+                    _approve_many(sel, lambda r: r["review_flags"],
+                                  "approved as it is (several at once)")
+                    _done(f"Approved {len(sel)} reports.")
+                if st.button(f"Exclude {len(sel)}", icon=":material/block:",
+                             help="Keeps the reports in the archive (Report text) but out of "
+                                  "every average and chart."):
+                    _exclude_many(sel, "excluded in review (several at once)")
+                    _done(f"Excluded {len(sel)} from averages; they stay in the archive.")
+        st.stop()
+
+    r = picked.iloc[0].to_dict()
     y = f"{r['yield_bpa']:g} bpa" if r["yield_bpa"] == r["yield_bpa"] and r["yield_bpa"] is not None \
         else "no yield"
     with st.container(border=True):
@@ -178,13 +219,13 @@ if mode == "queue":
         with st.container(horizontal=True):
             if r["suggestion"]:
                 if st.button("Apply fix", type="primary", icon=":material/auto_fix_high:"):
-                    db.update_row(r["dedup_hash"], r["suggestion"])
-                    _approve(r, r["review_flags"], "suggested fix applied")
-                    _done("Fix applied and approved.")
+                    _apply_fixes([r], "suggested fix applied")
+                    _done("Fix applied. If anything else still needs a look, the report "
+                          "stays in the queue.")
             if len(others):
                 if st.button("Keep both: different reports", icon=":material/call_split:"):
-                    for o in [r] + others.to_dict("records"):
-                        _approve(o, ["duplicate"], "kept: not the same report")
+                    _approve_many([r] + others.to_dict("records"), ["duplicate"],
+                                  "kept: not the same report")
                     _done("Kept both as separate reports.")
             if st.button("Approve as it is", icon=":material/check:"):
                 _approve(r, r["review_flags"], "approved as it is")
@@ -192,8 +233,7 @@ if mode == "queue":
             if st.button("Exclude", icon=":material/block:",
                          help="Keeps the report in the archive (Report text) but out of "
                               "every average and chart."):
-                db.set_decision(r["dedup_hash"], "excluded", r["review_flags"],
-                                "excluded in review", _who())
+                _exclude_many([r], "excluded in review")
                 _done("Excluded from averages; still in the archive.")
 
         with st.expander("Edit by hand"):
@@ -293,14 +333,12 @@ with st.container(horizontal=True, vertical_alignment="center"):
         delete = False
 
 if save:
-    n = 0
-    for pos, vals in edits.items():
-        # empty cells come back as None; dates as ISO strings — both bind as-is
-        vals = {k: (None if isinstance(v, str) and not v.strip() else v)
-                for k, v in vals.items()}
-        n += db.update_row(hashes[pos], vals)
-        # a person set these values: the parser's re-read must not undo them
-        _approve(f.iloc[pos].to_dict(), ["reread"], "edited in the table")
+    # empty cells come back as None; dates as ISO strings — both bind as-is
+    n = db.update_rows([(hashes[pos], {k: (None if isinstance(v, str) and not v.strip() else v)
+                                       for k, v in vals.items()})
+                        for pos, vals in edits.items()])
+    # a person set these values: the parser's re-read must not undo them
+    _approve_many([f.iloc[pos].to_dict() for pos in edits], ["reread"], "edited in the table")
     data.invalidate()
     st.session_state["rev_flash"] = f"Saved {n} row(s)."
     st.rerun()
