@@ -204,6 +204,18 @@ as sc` — it returns the submodule from `sys.modules` instead of reading it off
 which survives that deletion. Keep both defences; `db.py` is the only place in the repo
 that imports the connector.
 
+**One Snowflake session per process.** Every `sf_connect` returns a shared,
+kept-alive connection (`_KeptOpen`, `close()` is a no-op): a login costs 2-3 s
+and a query well under 1 s, so per-call logins made each review click take 6-10
+s. Callers take their own cursor. If the session dies, `_retry_once` (on every
+db/places/nass call that touches Snowflake) clears it, logs in again and reruns
+the call once. The import's temp staging table gets a unique name, because two
+imports may share the session. `data.load_all()` is built from two caches —
+`_reports()` and `_decisions()` — so a review decision calls
+`data.invalidate_decisions()` (re-reads the small decisions table) and only a
+changed report calls `data.invalidate()`. Measured 2026-10-04: approve ~1.5 s
+(was ~6.5), apply fix ~3.3 s (was ~9.5), first load after a restart ~10 s.
+
 Two ways in: the `SNOWFLAKE_*` env (key-pair or password) — what the deployed
 app uses — or `SNOWFLAKE_CONNECTION_NAME`, a profile in
 `~/.snowflake/connections.toml` for local runs (browser sign-in once per script

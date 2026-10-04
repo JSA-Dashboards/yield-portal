@@ -51,6 +51,20 @@ def _num(v):
         return float("nan")             # "(D)", "(NA)": withheld
 
 
+@db._retry_once
+def _fetch(keys: tuple):
+    """The cache rows for `keys`, over the app's shared Snowflake session."""
+    conn = db.sf_connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"SELECT cache_key, data, fetched_at FROM {CACHE_TABLE} "
+                    f"WHERE error IS NULL AND cache_key IN ({', '.join(['%s'] * len(keys))})",
+                    keys)
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+
 @st.cache_data(ttl=6 * 3600, show_spinner="Loading NASS yields…")
 def load(through_year: int):
     """-> (county, state, as_of). county: crop, year, state, county, fips, yield.
@@ -65,15 +79,7 @@ def load(through_year: int):
         wanted[ncc._cache_key("api_GET", state_params(crop))] = ("state", crop)
         for y in range(FIRST_YEAR, through_year + 1):
             wanted[ncc._cache_key("api_GET", county_params(crop, y))] = ("county", crop)
-    conn = db.sf_connect()
-    try:
-        cur = conn.cursor()
-        cur.execute(f"SELECT cache_key, data, fetched_at FROM {CACHE_TABLE} "
-                    f"WHERE error IS NULL AND cache_key IN ({', '.join(['%s'] * len(wanted))})",
-                    tuple(wanted))
-        hits = cur.fetchall()
-    finally:
-        conn.close()
+    hits = _fetch(tuple(wanted))
     county, state, as_of = [], [], None
     for key, data, fetched in hits:
         kind, crop = wanted[key]

@@ -60,6 +60,7 @@ def _parts(location):
             for p in _SPLIT.split(place_key(location)) if p.strip()]
 
 
+@db._retry_once
 def ensure_table():
     cols = ",\n    ".join(f"{c} {t}" for c, t in COLUMNS)
     conn, _ = db._connect()
@@ -71,6 +72,7 @@ def ensure_table():
         conn.close()
 
 
+@db._retry_once
 def fetch_decisions() -> dict:
     """{(state, place_key): {decision, counties, fips}}; {} before the table exists."""
     conn, _ = db._connect()
@@ -94,6 +96,7 @@ def cached_decisions() -> dict:
     return fetch_decisions()
 
 
+@db._retry_once
 def decide(state, key, decision, counties=(), fips=(), decided_by=None):
     """Record 'confirmed' (with the counties) or 'rejected' for one place."""
     ensure_table()
