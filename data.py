@@ -23,6 +23,14 @@ CROPS = ["Corn", "Soybeans"]
 IRRIGATION = ["Irrigated", "Non-irrigated", "Mixed"]
 DISEASE_OPTIONS = [t for t, _ in DISEASE_TAGS]
 NUMERIC = ["yield_bpa", "yield_min", "yield_max", "ly_yield", "expected_yield", "aph"]
+# Where a report came from (report_source). pdf / email: Ag Trader Talk's annual
+# PDF and report emails; manual: one of theirs keyed in by hand; jsa: JSA's own,
+# pasted or keyed in on Add reports. JSA sends some of its reports to Ag Trader
+# Talk too, so one can come back by email: the matcher dates the stored row
+# instead of adding it again, and the duplicate check catches a repeat it misses.
+SOURCE_LABEL = {"pdf": "Ag Trader Talk", "email": "Ag Trader Talk",
+                "manual": "Ag Trader Talk", "jsa": "JSA"}
+SOURCES = ["Ag Trader Talk", "JSA"]
 
 
 @st.cache_data(ttl=600, show_spinner="Loading reports…")
@@ -75,7 +83,32 @@ def _typed(rows) -> pd.DataFrame:
         df[c] = df[c].map(lambda v: bool(v) if pd.notna(v) else False)
     df["vs_ly"] = df["yield_bpa"] - df["ly_yield"]
     df["vs_aph"] = df["yield_bpa"] - df["aph"]
+    df["source"] = df["report_source"].map(SOURCE_LABEL).fillna(SOURCES[0])
     return df
+
+
+def headline(f: pd.DataFrame, latest: int, prev=None) -> dict:
+    """The headline tiles for `latest` against `prev` (Explore and the weekly
+    email): report count; average reported yield and its change in bpa and %;
+    the average gain on the same field last year and on APH, in bpa and as a %
+    of those reports' LY / APH bushels (sum of gains / sum of LY), over the
+    reports that give both; the most-cited damage."""
+    nan = float("nan")
+    cur = f[f["crop_year"] == latest]
+    avg = cur["yield_bpa"].mean()
+    avg_prev = f.loc[f["crop_year"] == prev, "yield_bpa"].mean() if prev else nan
+    out = {"latest": latest, "prev": prev, "reports": len(cur), "avg": avg,
+           "avg_prev": avg_prev, "avg_change": avg - avg_prev,
+           "avg_change_pct": (avg / avg_prev - 1) * 100 if avg_prev else nan}
+    for gain, base in (("vs_ly", "ly_yield"), ("vs_aph", "aph")):
+        both = cur.dropna(subset=[gain, base])
+        total = both[base].sum()
+        out[gain] = both[gain].mean() if len(both) else nan
+        out[f"{gain}_pct"] = both[gain].sum() / total * 100 if total else nan
+        out[f"{gain}_n"] = len(both)
+    tags = cur["disease"].dropna().str.split(", ").explode().value_counts()
+    out["damage"] = (tags.index[0], int(tags.iloc[0])) if len(tags) else None
+    return out
 
 
 def invalidate():

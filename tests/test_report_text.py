@@ -88,6 +88,10 @@ check("table without dates", RT.md_table(df.iloc[[1]], dates=False).splitlines()
       ["| Report |", "| --- |", "| **Clark Co, IL:** 230 bpa. |"])
 check("a pipe in a report can't split the cell",
       RT.md_report("Polk Co, IA: 60|62 bpa", "Polk Co", "IA"), r"**Polk Co, IA:** 60\|62 bpa")
+check("JSA's own reports are tagged; Ag Trader Talk's aren't",
+      (RT.md_report("Polk Co, IA: 210 bpa", "Polk Co", "IA", source="JSA"),
+       RT.md_report("Polk Co, IA: 210 bpa", "Polk Co", "IA", source="Ag Trader Talk")),
+      ("**Polk Co, IA:** 210 bpa :blue-badge[JSA]", "**Polk Co, IA:** 210 bpa"))
 
 # --- downloads -----------------------------------------------------------------------
 pdf = RT.to_pdf(RT.ordered(df), "Yield reports · 2026", "made-up rows")

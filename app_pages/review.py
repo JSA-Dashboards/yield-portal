@@ -210,7 +210,7 @@ if mode == "queue":
         place=queue.apply(_place, axis=1),
         checks=queue["review_flags"].map(lambda f: ", ".join(SHORT[k] for k in f)),
         fix=queue["suggestion"].map(checks.describe_fix),
-    )[["crop_year", "crop", "place", "yield_bpa", "checks", "fix", "raw_text"]]
+    )[["crop_year", "crop", "place", "yield_bpa", "checks", "fix", "source", "raw_text"]]
     event = st.dataframe(
         table, hide_index=True, height=320, on_select="rerun", selection_mode="single-row",
         key=_table_key("rev_queue", queue["dedup_hash"]),
@@ -221,6 +221,10 @@ if mode == "queue":
             "yield_bpa": st.column_config.NumberColumn("Yield", format="%.1f", width="small"),
             "checks": "Flagged for",
             "fix": "Suggested fix",
+            "source": st.column_config.TextColumn(
+                "Source", width="small",
+                help="Ag Trader Talk or JSA. A JSA report sent to Ag Trader Talk can come "
+                     "back by email: a duplicate pair shows which copy came from where."),
             "raw_text": st.column_config.TextColumn("Report", width="large"),
         })
     rows = _picked(event, len(queue))
@@ -238,9 +242,11 @@ if mode == "queue":
         st.markdown(RT.md_report(r["raw_text"], r["location"], r["state"]))
         others = df[df["dedup_hash"].isin(r["dup_of"])]
         if len(others):
-            st.caption("The other report(s) with the same place, crop, year and yield:")
+            st.caption(f"This one is from {r['source']}. The other report(s) with the same "
+                       "place, crop, year and yield:")
             for o in others.to_dict("records"):
-                st.markdown("> " + RT.md_report(o["raw_text"], o["location"], o["state"]))
+                st.markdown(f"> :gray-badge[{o['source']}] "
+                            + RT.md_report(o["raw_text"], o["location"], o["state"]))
         if r["suggestion"]:
             st.markdown(f"**Suggested fix:** {checks.describe_fix(r['suggestion'])}")
             for crop, text in (r["suggestion"].get("split") or {}).items():
