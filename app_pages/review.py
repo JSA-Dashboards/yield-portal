@@ -1,5 +1,7 @@
 """Review & edit — the review queue (reports the checks flagged) and the full
 table for hand edits."""
+import hashlib
+
 import streamlit as st
 
 import checks
@@ -69,6 +71,19 @@ def _fix(r, note):
         _approve(r, r["review_flags"], note)
 
 
+def _table_key(name, ids):
+    """A widget key that changes whenever the list does, so a selection made on
+    an older list (positions only) is dropped instead of pointing past the end
+    of a shorter one."""
+    sig = hashlib.md5("|".join(map(str, ids)).encode()).hexdigest()[:10]
+    return f"{name}_{st.session_state.get('rev_gen', 0)}_{sig}"
+
+
+def _picked(event, n):
+    """Selected row positions that still exist in a table of n rows."""
+    return [i for i in event.selection.rows if 0 <= i < n]
+
+
 def _place(r):
     return ", ".join(str(v) for v in (r["location"], r["state"]) if isinstance(v, str) and v)
 
@@ -103,11 +118,11 @@ if mode == "places":
     event = st.dataframe(
         groups[["state", "place", "suggestion", "reports"]], hide_index=True,
         on_select="rerun", selection_mode="multi-row",
-        key=f"rev_places_{st.session_state.get('rev_gen', 0)}",
+        key=_table_key("rev_places", groups["state"] + ":" + groups["place_key"]),
         column_config={"state": st.column_config.TextColumn("State", width="small"),
                        "place": "As written", "suggestion": "Suggested NASS county",
                        "reports": st.column_config.NumberColumn("Reports", width="small")})
-    picked = groups.iloc[event.selection.rows]
+    picked = groups.iloc[_picked(event, len(groups))]
     with st.container(horizontal=True):
         if st.button(f"Confirm {len(picked)} selected", type="primary", icon=":material/check:",
                      disabled=picked.empty):
@@ -164,7 +179,7 @@ if mode == "queue":
     )[["crop_year", "crop", "place", "yield_bpa", "checks", "fix", "raw_text"]]
     event = st.dataframe(
         table, hide_index=True, height=320, on_select="rerun", selection_mode="single-row",
-        key=f"rev_queue_{st.session_state.get('rev_gen', 0)}",
+        key=_table_key("rev_queue", queue["dedup_hash"]),
         column_config={
             "crop_year": st.column_config.NumberColumn("Year", format="%d", width="small"),
             "crop": st.column_config.TextColumn("Crop", width="small"),
@@ -174,7 +189,7 @@ if mode == "queue":
             "fix": "Suggested fix",
             "raw_text": st.column_config.TextColumn("Report", width="large"),
         })
-    rows = event.selection.rows
+    rows = _picked(event, len(queue))
     if not rows:
         st.caption(":material/arrow_upward: Select a report to review it.")
         st.stop()
