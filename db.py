@@ -318,23 +318,33 @@ def insert_new(records):
     return len(fresh), len(records) - len(fresh)
 
 
-def update_row(dedup_hash, changes):
-    """Apply portal edits to one row. Only EDITABLE fields are accepted."""
-    changes = {k: v for k, v in changes.items() if k in EDITABLE}
-    if not changes:
+def update_rows(items):
+    """Apply portal edits, [(dedup_hash, {field: value})], over one connection
+    (one Snowflake login for a whole batch, not one per row). Only EDITABLE
+    fields are accepted. -> rows updated."""
+    items = [(h, {k: v for k, v in ch.items() if k in EDITABLE}) for h, ch in items]
+    items = [(h, ch) for h, ch in items if ch]
+    if not items:
         return 0
-    changes["updated_at"] = _now()
     conn, ph = _connect()
     try:
         cur = conn.cursor()
-        sets = ", ".join(f"{k} = {ph}" for k in changes)
-        cur.execute(f"UPDATE {TABLE} SET {sets} WHERE dedup_hash = {ph}",
-                    tuple(_clean(v) for v in changes.values()) + (dedup_hash,))
-        n = cur.rowcount
+        n = 0
+        for h, changes in items:
+            changes = {**changes, "updated_at": _now()}
+            sets = ", ".join(f"{k} = {ph}" for k in changes)
+            cur.execute(f"UPDATE {TABLE} SET {sets} WHERE dedup_hash = {ph}",
+                        tuple(_clean(v) for v in changes.values()) + (h,))
+            n += cur.rowcount
         conn.commit()
         return n
     finally:
         conn.close()
+
+
+def update_row(dedup_hash, changes):
+    """Apply portal edits to one row."""
+    return update_rows([(dedup_hash, changes)])
 
 
 def set_reported(dedup_hash, date_reported, email_subject=None, email_id=None):
@@ -474,30 +484,41 @@ def fetch_all_and_decisions():
         conn.close()
 
 
-def set_decision(dedup_hash, decision, flags=(), note=None, decided_by=None):
-    """Record (or replace) the decision on one report."""
-    if decision not in DECISIONS:
-        raise ValueError(f"decision must be one of {DECISIONS}")
-    row = (dedup_hash, decision, ", ".join(flags) or None, _clean(note),
-           _clean(decided_by) or "portal", _now())
+def set_decisions(items):
+    """Record (or replace) decisions, [(dedup_hash, decision, flags, note,
+    decided_by)], over one connection."""
+    rows = []
+    for dedup_hash, decision, flags, note, decided_by in items:
+        if decision not in DECISIONS:
+            raise ValueError(f"decision must be one of {DECISIONS}")
+        rows.append((dedup_hash, decision, ", ".join(flags) or None, _clean(note),
+                     _clean(decided_by) or "portal", _now()))
+    if not rows:
+        return
     conn, ph = _connect()
     try:
         cur = conn.cursor()
         marks = ", ".join([ph] * len(_REVIEW_NAMES))
-        if use_snowflake():
-            cur.execute(
-                f"MERGE INTO {REVIEW_TABLE} t USING (SELECT {marks}) "
-                f"s ({', '.join(_REVIEW_NAMES)}) ON t.dedup_hash = s.dedup_hash "
-                f"WHEN MATCHED THEN UPDATE SET "
-                + ", ".join(f"{c} = s.{c}" for c in _REVIEW_NAMES[1:])
-                + f" WHEN NOT MATCHED THEN INSERT ({', '.join(_REVIEW_NAMES)}) "
-                f"VALUES ({', '.join('s.' + c for c in _REVIEW_NAMES)})", row)
-        else:
-            cur.execute(f"INSERT OR REPLACE INTO {REVIEW_TABLE} ({', '.join(_REVIEW_NAMES)}) "
-                        f"VALUES ({marks})", row)
+        for row in rows:
+            if use_snowflake():
+                cur.execute(
+                    f"MERGE INTO {REVIEW_TABLE} t USING (SELECT {marks}) "
+                    f"s ({', '.join(_REVIEW_NAMES)}) ON t.dedup_hash = s.dedup_hash "
+                    f"WHEN MATCHED THEN UPDATE SET "
+                    + ", ".join(f"{c} = s.{c}" for c in _REVIEW_NAMES[1:])
+                    + f" WHEN NOT MATCHED THEN INSERT ({', '.join(_REVIEW_NAMES)}) "
+                    f"VALUES ({', '.join('s.' + c for c in _REVIEW_NAMES)})", row)
+            else:
+                cur.execute(f"INSERT OR REPLACE INTO {REVIEW_TABLE} "
+                            f"({', '.join(_REVIEW_NAMES)}) VALUES ({marks})", row)
         conn.commit()
     finally:
         conn.close()
+
+
+def set_decision(dedup_hash, decision, flags=(), note=None, decided_by=None):
+    """Record (or replace) the decision on one report."""
+    set_decisions([(dedup_hash, decision, flags, note, decided_by)])
 
 
 def clear_decision(dedup_hash):
