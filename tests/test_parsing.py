@@ -239,6 +239,55 @@ matched("YIELD: NC IA silage numbers", "Howard Co IA 215", "Howard Co")  # quote
 matched("YIELD: Chatham, IL soybeans", "60 acres, 91 bu/acre\n60 acres, 83 bu/acre, both records by 8%.",
         "Sangamon Co")                                                   # filed under the county
 
+
+# --- a colleague's forward ------------------------------------------------------
+GMAIL_FWD = (
+    "\r\nSent from my iPhone\r\n\r\nBegin forwarded message:\r\n\r\n"
+    "\tFrom: A Farmer <farmer@example.com>\r\n\tDate: September 12, 2024 at 1:48:08 PM CDT\r\n"
+    "\tTo: A Colleague <colleague@example.com>\r\n\tSubject: Fwd: YIELD: Logan Co IL corn\r\n\t\r\n"
+    "\t---------- Forwarded message ---------\r\n"
+    "\tFrom: Reports <reports@agtradertalk.com <mailto:reports@agtradertalk.com> >\r\n"
+    "\tDate: Thu, Sep 12, 2024 at 12:16 PM\r\n\tSubject: YIELD: Logan Co IL corn\r\n\tTo: \r\n\t\r\n"
+    "\tLogan Co Il 40 acres 251 BPA dry.\r\n\r\n\t \r\n")
+OUTLOOK_FWD = (
+    "From: A Farmer <farmer@example.com> \r\nSent: Wednesday, September 11, 2024 10:15 AM\r\n"
+    "To: A Colleague <colleague@example.com>\r\nSubject: Fwd: YIELD: Ames, IA\r\n\r\n \r\n"
+    "---------- Forwarded message ---------\r\nFrom: Reports <reports@agtradertalk.com>\r\n"
+    "Date: Wed, Sep 11, 2024 at 8:50 AM\r\nSubject: YIELD: Ames, IA\r\nTo: \r\n\r\n \r\n"
+    "Soybeans, 13% moisture, 61 bu/acre.\r\n")
+for label, body, subj, sent, want in [
+        ("Gmail forward via iPhone", GMAIL_FWD, "YIELD: Logan Co IL corn",
+         dt.datetime(2024, 9, 12, 12, 16), [("Corn", "IL", "Logan Co", 251)]),
+        ("Gmail forward via Outlook", OUTLOOK_FWD, "YIELD: Ames, IA",
+         dt.datetime(2024, 9, 11, 8, 50), [("Soybeans", "IA", "Ames", 61)])]:
+    fwd = P.unwrap_forward(body)
+    check(f"{label}: the original subject and send time", fwd and (fwd[0], fwd[2]), (subj, sent))
+    if fwd:
+        rows = P.parse_email(fwd[0], fwd[1], 2024, fwd[2].date())
+        check(f"{label}: just the report", [(r["crop"], r["state"], r["location"], r["yield_bpa"])
+                                            for r in rows], want)
+check("not a forward", P.unwrap_forward("Logan Co IL 40 acres 251 BPA dry."), None)
+
+# --- state headings over '-County-Region ST-' bullets -------------------------------
+rows = email("YIELD: MO/IL/KS corn",
+             "Missouri:\n\n-Linn Co-Central MO- 100 acres went 150 bpa dry, below aph.\n\n"
+             "-Cooper Co-West Central MO-3/4 done, early corn coming in 220 bpa\n\n"
+             "Illinois: \n\n-Greene County-picked one field so far-18.5%, 225 bpa\n\n"
+             "Kansas:\n\n*\tDoniphan Co-150 acres went 140 bpa on sandy soils\n"
+             "*\tNW KS- silage tons were down to 15/acre\n"
+             "*\tLogan Co-Western KS-dryland made 40 bpa, never could get a rain\n")
+check("each bullet is a report; a heading gives the state to those that name none",
+      [(r["location"], r["state"], r["yield_bpa"]) for r in rows],
+      [("Linn Co", "MO", 150), ("Cooper Co", "MO", 220), ("Greene County", "IL", 225),
+       ("Doniphan Co", "KS", 140), ("NW", "KS", None), ("Logan Co", "KS", 40)])
+check("'Farmers Co-op' doesn't open a report", P.parse_location("Farmers Co-op said 200 bpa"),
+      (None, None))
+check("a conversation with the source isn't a report", P.is_report_subject("RE: Yields Sharing"), False)
+check("a correction is", P.is_report_subject("CORRECTION: YIELD: Nebraska corn"), True)
+check("a forward whose header can't be read is left alone",
+      P.unwrap_forward("From: Reports <reports@agtradertalk.com>\nDate: sometime\n"
+                       "Subject: YIELD: Logan Co IL corn\n\nLogan Co IL 251 bpa"), None)
+
 if failures:
     print(f"FAILED {len(failures)}:")
     for f in failures:

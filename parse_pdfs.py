@@ -14,6 +14,7 @@ pulls over that text and may be null when the wording doesn't expose them.
 Output: yield_observations.csv + .json in this folder, plus a stats summary.
 """
 import fitz  # pymupdf
+import datetime as dt
 import re
 import os
 import csv
@@ -81,9 +82,18 @@ LOOSE_RE = re.compile(
     r"^([A-Z][a-z.']+(?:\s+[A-Z][a-z.']+)?(?:\s+(?:Co\.?|County|Parish))?),?\s+(%s)\b"
     % "|".join(ABBRS))
 # A county with no state, then a separator: "Polk Co – 150 bpa" in a run of
-# Iowa reports. Starts a new report in the state of the one before it.
+# Iowa reports. Starts a new report in the state of the one before it (or of
+# the email's "Illinois:" heading). A hyphen may run straight into the report:
+# "Greene County-picked one field", "Doniphan Co-150 acres" (not "Co-op").
 NOSTATE_CO_RE = re.compile(
-    r"^((?:[A-Z][a-z.']+\s+){1,2}(?:Co\.?|County|Parish))\s*[–—:\-]\s")
+    r"^((?:[A-Z][a-z.']+\s+){1,2}(?:Co\.?|County|Parish))"
+    r"(?:\s*[–—:\-]\s|-(?!op\b)(?=[a-z\d]))")
+# Hyphens for commas, region before the state: "Linn Co-Central MO- 100 acres",
+# "Cooper Co-West Central MO-", "Logan Co-Western KS-dryland made 40".
+HYPHEN_CO_RE = re.compile(
+    r"^((?:[A-Z][a-z.']+\s+){1,2}(?:Co\.?|County|Parish))\s*[–—\-]\s*"
+    r"(?:(?:(?:North|South|East|West)(?:east|west|ern)?|Central|NE|NW|SE|SW|NC|SC|EC|WC)"
+    r"(?:\s+Central)?\s+)?(%s)\b" % "|".join(ABBRS))
 # Regional block led by the state itself: "AR Delta:", "MS yields –", "AR –".
 LEAD_STATE_RE = re.compile(
     r"^(%s)\b\s*([A-Za-z ]*?)\s*%s" % ("|".join(ABBRS), _SEP))
@@ -106,6 +116,9 @@ def parse_location(line):
     if m:
         return m.group(1).strip(), _TITLE[m.group(2)]
     m = LOOSE_RE.match(line)
+    if m:
+        return m.group(1).strip(), m.group(2)
+    m = HYPHEN_CO_RE.match(line)
     if m:
         return m.group(1).strip(), m.group(2)
     m = NOSTATE_CO_RE.match(line)
@@ -644,17 +657,27 @@ def parse_lines(lines, crop_year, default_crop=None, source_file=None,
 
 
 # --- single emails ------------------------------------------------------------
-# "YIELD:", "Yield:", "YIELD " and resends: "RESEND: Correcting Subject YIELD: ..."
+# "YIELD:", "Yield:", "YIELD " and resends: "RESEND: Correcting Subject YIELD: ...",
+# "CORRECTION: YIELD: ..."
 _SUBJ_PREFIX = re.compile(
-    r"^\s*(?:(?:re|fw|fwd|resend)\s*:\s*)*(?:correcting subject\s*)?yield\b\s*:?\s*", re.I)
+    r"^\s*(?:(?:re|fw|fwd|resend|correction)\s*:\s*)*(?:correcting subject\s*)?yield\b\s*:?\s*",
+    re.I)
+_REPORT_SUBJECT = re.compile(r"\byield\b", re.I)
+
+
+def is_report_subject(subject):
+    """Every report email says YIELD in its subject; a conversation with the
+    source ("RE: Yields Sharing") doesn't, and holds signatures, not reports."""
+    return bool(_REPORT_SUBJECT.search(subject or ""))
 # Lines an email drags along: Inky banner (also as raw links), signature, phone.
 _EMAIL_NOISE = re.compile(
     r"^(?:\[?external\]?\b|safe\b|report this email|caution\b|more\.\.\.|"
     r"this (?:message|email) (?:came|is|was)|garrett\s+toay\b|ag\s*trader\s*talk|"
     r"sent from my|www\.|<?https?://|\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})", re.I)
 _BANNER = re.compile(r"^\s*external\s*\(|inkyphishfence", re.I)
-# List markers: "*<tab>Sac Co, IA: ...", "• ...", "1. ..." — but not "1.0 beans".
-_BULLET = re.compile(r"^\s*(?:[*•·▪◦‣]\s*|-\s+|\d{1,2}[.)]\s+)")
+# List markers: "*<tab>Sac Co, IA: ...", "• ...", "-Linn Co-...", "1. ..." — but
+# not "1.0 beans".
+_BULLET = re.compile(r"^\s*(?:[*•·▪◦‣]\s*|-\s+|-(?=[A-Z])|\d{1,2}[.)]\s+)")
 # Words that make up a place name; the lowercase lookahead keeps an all-caps
 # state ("SW MO Vernon Co") from being read as part of the county.
 _NAME = r"[A-Z](?=[A-Za-z.'\-]*[a-z])[A-Za-z.'\-]+"
@@ -701,6 +724,9 @@ def _email_lines(body):
         ln = _BULLET.sub("", ln)
         if (not ln or _EMAIL_NOISE.match(ln) or _BANNER.search(ln)
                 or "@agtradertalk.com" in ln.lower()):
+            continue
+        if STATE_HDR_RE.match(ln.rstrip(": ")):
+            lines.append(ln.rstrip(": "))   # "Missouri:" over reports that name no state
             continue
         if ln.endswith(":") and not re.search(r"\d", ln) and not CROP_HDR_RE.match(ln):
             continue                    # a heading such as "Silage numbers NC IA:"
@@ -823,6 +849,51 @@ def parse_email(subject, body, crop_year, date_reported=None):
         r["date_reported"] = date_reported
         r["email_subject"] = (subject or "").strip() or None
     return rows
+
+
+# --- forwards -----------------------------------------------------------------
+# A colleague's forward of one of the emails (2024's came through a farmer's
+# Gmail): the innermost "From: ...@agtradertalk..." header block holds the
+# original send time and subject, and the report follows it.
+_FWD_FROM = re.compile(r"^\s*From:.*agtradertalk", re.I)
+_FWD_HDR = re.compile(r"^\s*(Date|Sent|To|Cc|Subject):\s*(.*)$", re.I)
+_FWD_ZONE = re.compile(r"\s+(?:[ECMP][SD]T|UTC|GMT)$")
+_FWD_DATES = ("%a, %b %d, %Y %I:%M %p",         # Gmail: "Wed, Sep 11, 2024 at 8:50 AM"
+              "%A, %B %d, %Y %I:%M %p",         # Outlook: "Wednesday, September 11, 2024 10:15 AM"
+              "%B %d, %Y %I:%M:%S %p")          # iPhone: "September 12, 2024 at 1:48:08 PM CDT"
+
+
+def _forward_date(text):
+    s = re.sub(r"\s+", " ", (text or "").replace(" ", " ")).replace(" at ", " ").strip()
+    s = _FWD_ZONE.sub("", s)
+    for fmt in _FWD_DATES:
+        try:
+            return dt.datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def unwrap_forward(body):
+    """A forwarded copy of one of the emails -> (subject, body, sent) as first sent,
+    from the innermost "From: ...@agtradertalk..." header block; None when there's
+    no such block or its date or subject can't be read. Only for mail from someone
+    else: the source's own replies quote his headers too."""
+    lines = (body or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    starts = [i for i, ln in enumerate(lines) if _FWD_FROM.match(ln)]
+    if not starts:
+        return None
+    hdr, j = {}, starts[-1] + 1
+    while j < len(lines):
+        m = _FWD_HDR.match(lines[j])
+        if not m:
+            break
+        hdr[m.group(1).lower()] = m.group(2).strip()
+        j += 1
+    sent = _forward_date(hdr.get("date") or hdr.get("sent"))
+    if not sent or not hdr.get("subject"):
+        return None
+    return hdr["subject"], "\n".join(ln.strip() for ln in lines[j:]), sent
 
 
 def main():

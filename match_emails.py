@@ -15,7 +15,11 @@ in it:
   review  no crop or no state could be read -> stored without them (when
           writing), so it waits on Review & edit as "Needs crop/state"
 Emails run oldest first, so the first report date wins; an email whose
-Message-ID is already on a row is skipped, so re-running is safe.
+Message-ID is already on a row is skipped, so re-running is safe. A colleague's
+forward of one of the emails ("FW: YIELD: ...", how the 2024 ones arrived) is
+read as the original: its subject, report and send time come from the forwarded
+header block (parse_pdfs.unwrap_forward). An email without YIELD in its subject
+is a conversation, not a report, and is skipped.
 
 --auto is what the Windows scheduled task "Yield Portal - email sync" runs every
 30 minutes on Kolten's PC: it writes, sends all output to logs/email_sync.log,
@@ -23,8 +27,13 @@ and records each run in EMAIL_SYNC_RUNS so Review & edit can show when the email
 were last checked. The task runs only while he's logged in (Outlook COM needs
 his session); a missed run is caught up on the next one.
 
-Outlook COM only sees its Cached Exchange window — mail older than that, or not
-yet synced, is invisible here (see the reference_outlook_cache_window memory).
+Outlook COM only sees classic Outlook's local cache: mail outside its Cached
+Exchange window, or not synced yet, is invisible here (see the
+reference_outlook_cache_window memory). Kolten reads mail in the new Outlook, so
+classic Outlook's cache is only as fresh as its last sync. A report he archived
+sits in the Archive folder, which syncs after the Inbox. When --auto has to start
+Outlook itself, it waits for the cache to catch up first. Mail the cache can't
+reach yet can be saved from Outlook as .msg files and passed with --msg.
 """
 import argparse
 import collections
@@ -32,7 +41,9 @@ import datetime as dt
 import os
 import pathlib
 import socket
+import subprocess
 import sys
+import time
 import traceback
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -66,49 +77,90 @@ import parse_pdfs as P  # noqa: E402
 
 SENDER = ('@SQL="http://schemas.microsoft.com/mapi/proptag/0x5D01001F" '
           "LIKE '%agtradertalk%'")       # Unicode sender tag: the filter that doesn't undercount
+# Forwards come from colleagues, so they're found by subject (DASL LIKE only does
+# prefix or substring) and kept only when unwrap_forward finds the original header.
+FORWARDED = '@SQL="urn:schemas:httpmail:subject" LIKE \'%YIELD:%\''
 MESSAGE_ID = "http://schemas.microsoft.com/mapi/proptag/0x1035001F"
 FOLDERS = ["Inbox", "Deleted Items", "Archive"]
 
 
-def read_emails():
+def _mail(m, folder):
+    """An Outlook item -> the email as first sent (a colleague's forward unwrapped)."""
+    t = m.ReceivedTime                                  # wall-clock local time
+    e = {"folder": folder, "subject": m.Subject or "", "body": m.Body or "",
+         "received": dt.datetime(t.year, t.month, t.day, t.hour, t.minute),
+         "msgid": m.PropertyAccessor.GetProperty(MESSAGE_ID), "forwarded": False}
+    if "agtradertalk" not in (m.SenderEmailAddress or "").lower():
+        fwd = P.unwrap_forward(e["body"])
+        if fwd:
+            e.update(subject=fwd[0], body=fwd[1], received=fwd[2].replace(second=0),
+                     folder=f"{folder} (forward)", forwarded=True)
+    return e
+
+
+def _outlook_running():
+    """Is classic Outlook already open? Then its cache has been syncing all along."""
+    out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq OUTLOOK.EXE", "/NH"],
+                         capture_output=True, text=True,
+                         creationflags=subprocess.CREATE_NO_WINDOW)
+    return "OUTLOOK.EXE" in out.stdout.upper()
+
+
+def _let_cache_catch_up(root, quiet=45, limit=240):
+    """Outlook was started for this run, with no window: give its cache time to sync
+    before reading, until the folders' item counts hold still for `quiet` seconds
+    (at most `limit`)."""
+    def counts():
+        out = []
+        for name in FOLDERS:
+            try:
+                out.append(root.Folders[name].Items.Count)
+            except Exception:
+                out.append(None)
+        return out
+    t0 = changed = time.time()
+    last = counts()
+    while time.time() - t0 < limit and time.time() - changed < quiet:
+        time.sleep(5)
+        now = counts()
+        if now != last:
+            last, changed = now, time.time()
+    print(f"Started Outlook for this run; gave its cache {time.time() - t0:.0f}s to sync")
+
+
+def read_emails(catch_up=False):
     import win32com.client
+    started_here = catch_up and not _outlook_running()
     ns = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
     root = ns.DefaultStore.GetRootFolder()
-    out = []
+    if started_here:
+        _let_cache_catch_up(root)
+    out = {}
     for name in FOLDERS:
-        try:
-            items = root.Folders[name].Items.Restrict(SENDER)
-        except Exception:
-            continue
-        for m in items:
+        for flt in (SENDER, FORWARDED):
             try:
-                if m.Class != 43:                       # mail items only
-                    continue
-                t = m.ReceivedTime                      # wall-clock local time
-                out.append({
-                    "folder": name, "subject": m.Subject or "", "body": m.Body or "",
-                    "received": dt.datetime(t.year, t.month, t.day, t.hour, t.minute),
-                    "msgid": m.PropertyAccessor.GetProperty(MESSAGE_ID),
-                })
+                items = root.Folders[name].Items.Restrict(flt)
             except Exception:
                 continue
-    out.sort(key=lambda e: e["received"])
-    return out
+            for m in items:
+                try:
+                    if m.Class != 43:                   # mail items only
+                        continue
+                    e = _mail(m, name)
+                except Exception:
+                    continue
+                if flt is SENDER or e["forwarded"]:
+                    out.setdefault(e["msgid"], e)
+    return sorted(out.values(), key=lambda e: e["received"])
 
 
 def read_msg_files(paths):
-    """Saved .msg files (e.g. dragged out of Outlook) — for emails the local
-    cache doesn't hold yet."""
+    """Saved .msg files (e.g. saved out of Outlook's server search) — for emails
+    the local cache doesn't hold yet."""
     import win32com.client
     ns = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-    out = []
-    for p in paths:
-        m = ns.OpenSharedItem(str(pathlib.Path(p).resolve()))
-        t = m.ReceivedTime
-        out.append({"folder": "msg file", "subject": m.Subject or "", "body": m.Body or "",
-                    "received": dt.datetime(t.year, t.month, t.day, t.hour, t.minute),
-                    "msgid": m.PropertyAccessor.GetProperty(MESSAGE_ID)})
-    return out
+    return [_mail(ns.OpenSharedItem(str(pathlib.Path(p).resolve())), "msg file")
+            for p in paths]
 
 
 def _desc(r):
@@ -159,7 +211,7 @@ def run(args):
     archive = data.frame()
     applied = set(archive["email_id"].dropna())
     archive = archive[archive["status"] != "superseded"].reset_index(drop=True)
-    emails = read_emails()
+    emails = read_emails(catch_up=args.auto)
     seen_ids = {e["msgid"] for e in emails}
     emails += [e for e in read_msg_files(args.msg) if e["msgid"] not in seen_ids]
     emails.sort(key=lambda e: e["received"])
@@ -170,6 +222,11 @@ def run(args):
     for e in emails:
         if e["msgid"] in applied:
             tally["email already applied"] += 1
+            continue
+        if not P.is_report_subject(e["subject"]):
+            tally["not a report"] += 1
+            print(f"{e['received']:%Y-%m-%d %H:%M}  {e['subject'][:70]}\n"
+                  "      (skipped: not a report, no YIELD in the subject)")
             continue
         d = e["received"].date()
         rows = P.parse_email(e["subject"], e["body"], d.year, d)

@@ -91,6 +91,14 @@ out_lost = checks.run(pd.DataFrame([lost, rows[0]]), {})
 check("no crop or state: 'incomplete', out of averages until set",
       (out_lost.loc[0, "review_flags"], out_lost.loc[0, "status"], bool(out_lost.loc[0, "in_analysis"])),
       (["incomplete"], "flagged", False))
+check("...and no state: nothing to suggest", out_lost.loc[0, "suggestion"], None)
+no_crop = [row("Adams Co IA - 226 bpa, down 15 from last year.", crop=None, state="IA"),
+           row("Adams Co IA - 62 bpa, on par with last year.", crop=None, state="IA",
+               location="Adams County")]
+out_nc = checks.run(pd.DataFrame(no_crop), {})
+check("no crop but a corn-sized yield: corn suggested",
+      (out_nc.loc[0, "review_flags"], out_nc.loc[0, "suggestion"]), (["incomplete"], {"crop": "Corn"}))
+check("no crop and a yield either crop could make: set by hand", out_nc.loc[1, "suggestion"], None)
 
 # --- a report with both crops -------------------------------------------------------
 both = row("Story Co, IA: Corn running 205 bu/ac vs 215 target. First beans went 61 bu/ac "
