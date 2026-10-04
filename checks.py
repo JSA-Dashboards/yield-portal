@@ -13,6 +13,7 @@ import pandas as pd
 import parse_pdfs as P
 
 CHECKS = {
+    "split": "Gives yields for both corn and soybeans: one report per crop is suggested",
     "range": "Yield outside the usual range (corn 50–300 bpa, soybeans 10–100)",
     "corn?": "A soybean yield over 100 bpa, so probably a corn report",
     "reread": "The parser now reads a different figure from this report",
@@ -44,6 +45,33 @@ def reread(row) -> dict:
     return changed if any(f in changed for f in _REREAD_FLAGS_ON) else {}
 
 
+def row_checks(df: pd.DataFrame) -> pd.DataFrame:
+    """The checks that depend on a report's own text alone (the re-read and the
+    two-crop split), computed once with the cached reports so a review decision
+    doesn't re-parse every report. run() computes them itself when they're absent."""
+    out = df.copy()
+    recs = out.to_dict("records")
+    out["_reread"] = [reread(r) for r in recs]
+    out["_split"] = [P.split_by_crop(r["raw_text"] or "", r["crop"]) for r in recs]
+    return out
+
+
+def split_rows(r) -> list:
+    """The reports a 'split' suggestion makes: one per crop, each with its own
+    sentences, figures and hash, carrying the original's place, source, date,
+    email and notes."""
+    out = []
+    for crop, text in (r["suggestion"] or {}).get("split", {}).items():
+        child = {k: r.get(k) for k in ("crop_year", "state", "location", "report_source",
+                                       "source_file", "date_reported", "email_subject",
+                                       "email_id", "notes")}
+        child.update(P.extract_metrics(text, crop))
+        child.update(crop=crop, raw_text=text,
+                     dedup_hash=P.dedup_hash(r["crop_year"], crop, r["state"], r["location"], text))
+        out.append(child)
+    return out
+
+
 def _place_key(loc) -> str:
     import data                      # here: data imports this module
     return data.loc_key(loc)
@@ -65,6 +93,11 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
     for i, r in enumerate(out.to_dict("records")):
         if gone[i]:
             continue
+        parts = r["_split"] if "_split" in r else P.split_by_crop(r["raw_text"] or "", r["crop"])
+        if parts:                    # the split answers the crop and the figures
+            flags[i].append("split")
+            suggestion[i] = {"split": parts}
+            continue
         fix = {}
         y = r["yield_bpa"]
         if not _missing(y):
@@ -74,7 +107,7 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
             elif ((r["crop"] == "Corn" and not CORN_RANGE[0] <= y <= CORN_RANGE[1])
                   or (r["crop"] == "Soybeans" and y < SOY_RANGE[0])):
                 flags[i].append("range")
-        changed = reread(r)
+        changed = r["_reread"] if "_reread" in r else reread(r)
         if changed:
             flags[i].append("reread")
             fix.update(changed)
@@ -119,6 +152,10 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
 
 def describe_fix(fix: dict) -> str:
     """'crop → Corn, yield 12 → 241' style text for a suggestion."""
+    if fix and "split" in fix:
+        return "split into " + " + ".join(
+            f"{crop} {P.extract_metrics(text, crop)['yield_bpa']:g} bpa"
+            for crop, text in fix["split"].items())
     names = {"crop": "crop", "yield_bpa": "yield", "yield_min": "low", "yield_max": "high",
              "ly_yield": "last year", "expected_yield": "expected"}
     parts = []
