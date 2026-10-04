@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 import data
+import field_issues as FI
 
 VIEW_ONLY = st.session_state.get("view_only", False)
 US_STATES_TOPO = "https://cdn.jsdelivr.net/npm/vega-datasets@2.8.0/data/us-10m.json"
@@ -188,6 +189,7 @@ with right, st.container(border=True):
 
 with st.container(border=True):
     st.markdown("**Disease & damage mentions**")
+    st.caption("Reports naming each, by season. " + FI.BLANK_LINE)
     t = f[["crop_year", "disease"]].dropna()
     if t.empty:
         st.caption("No disease or damage named in these reports.")
@@ -213,6 +215,8 @@ with st.container(border=True):
             ).properties(height=max(220, 44 * len(order))))
         else:
             tbl, cfg = _year_table(counts[["tag", "crop_year", "reports"]], "reports", "%d")
+            cfg = {c: st.column_config.NumberColumn(f"{c} (of {totals[int(c)]:,})", format="%d")
+                   for c in cfg}                # the denominator in every column
             tbl = tbl.fillna(0)          # no mention that year = 0, not unknown
             st.dataframe(tbl.set_index("tag").loc[order].reset_index(), hide_index=True,
                          column_config={"tag": "Disease / damage", **cfg})

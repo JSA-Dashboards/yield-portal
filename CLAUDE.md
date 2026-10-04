@@ -93,6 +93,25 @@ County") or several ("Moultrie/Coles Co") is used straight away; a near-spelling
 Moines" is in Polk County) waits on **Review & edit → Places** (`COUNTY_MATCHES`);
 towns and regions use the state's numbers rather than a guessed county.
 
+## Field issues — a reference, not a damage estimate (internal)
+
+`app_pages/field_issues.py` + `field_issues.py`, registered only off the view link.
+Reads the `disease` tags (binary, no severity — reporters don't give it; grouped
+Disease / Weather / Pests & field) and shows: how often each was noted **with the
+denominator** (every report that season), every place it was noted (single mentions
+included), places where the same issue recurs across seasons, and yields "observed
+alongside" it (median ratio to the 5-season average, noted vs not noted in the same
+state, crop and season) **only when both sides have 5+ reports**. Copy rules: "noted",
+"mentioned", "observed alongside"; never "caused", "cost" or "loss of". Every view
+carries `FI.BLANK_LINE` (voluntary reporting: a blank county is not a clean county);
+Explore's disease chart carries it too, with denominators in the table.
+
+The vocabulary is the reports' own (`parse_pdfs.DISEASE_TAGS`), not a textbook list:
+drought, excess water and rust dominate. Goss's wilt, anthracnose, phytophthora,
+compaction and nutrient deficiency were added so they're caught if they turn up.
+Stored tags are the source of truth (editable on Review & edit); a tag-list change
+doesn't rewrite stored rows.
+
 ## Variety trials — the second archive
 
 **Variety trials** shows what the state universities published at each test plot, so a

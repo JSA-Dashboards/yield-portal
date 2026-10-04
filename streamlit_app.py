@@ -83,6 +83,8 @@ if not VIEW_ONLY:                       # the internal pages never exist on the 
         # Internal until the numbers have been reviewed (Kolten, 2026-10-04).
         st.Page("app_pages/normal.py", title="Reports vs normal",
                 icon=":material/compare_arrows:"),
+        st.Page("app_pages/field_issues.py", title="Field issues",
+                icon=":material/coronavirus:"),
         # Variety trials are internal for now: Ohio State has not given written
         # permission for derived use of its corn test, and the team agreed this stays
         # out of anything customer-facing until the permissions come back.

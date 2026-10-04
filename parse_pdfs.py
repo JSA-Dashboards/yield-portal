@@ -387,9 +387,16 @@ DISEASE_TAGS = [
     ("SDS", r"sudden\s+death|\bsds\b"),
     ("White mold", r"white\s+mold"),
     ("Frogeye", r"frog\s?eye"),
+    # On the list so they're caught when they turn up; none had by 2026.
+    ("Goss's wilt", r"\bgoss"),
+    ("Anthracnose", r"anthracnose"),
+    ("Phytophthora", r"phytophthora"),
     ("Disease (general)", r"\bdisease"),
     ("Insects", r"aphids?|insects?|rootworm|corn\s+borer|japanese\s+beetle|stink\s+bugs?"),
     ("Pollination", r"pollinat"),
+    ("Compaction", r"compact(?:ion|ed)\b"),
+    ("Nutrient deficiency", r"(?:nitrogen|potassium|potash|sulfur|phosphorus|nutrient)\s+"
+                            r"(?:deficien\w*|short\w*)|\bdeficien(?:cy|t)\b"),
     ("Hail", r"\bhail"),
     ("Wind/lodging", r"wind[- ]?damage\w*|green\s?snap|lodg\w*|downed|"
                      r"(?:fall(?:ing)?|fell)\s+over|blown\s+(?:down|over)"),
@@ -406,7 +413,8 @@ DISEASE_TAGS = [
     ("Frost", r"\bfrost|\bfreez"),
 ]
 _DISEASE_RES = [(tag, re.compile(rx, re.I)) for tag, rx in DISEASE_TAGS]
-_SPECIFIC_DISEASES = {t for t, _ in DISEASE_TAGS[:11]}
+# every named disease (the tags before the catch-all)
+_SPECIFIC_DISEASES = {t for t, _ in DISEASE_TAGS[:[t for t, _ in DISEASE_TAGS].index("Disease (general)")]}
 
 
 def extract_disease(text):
