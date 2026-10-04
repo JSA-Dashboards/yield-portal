@@ -1,4 +1,5 @@
-"""Add reports — paste one of the report emails (stamped with its date), or key one in."""
+"""Add reports — paste a report email (stamped with its date), or key one in, from
+Ag Trader Talk or JSA's own."""
 import datetime as dt
 
 import pandas as pd
@@ -18,9 +19,16 @@ st.title("Add reports")
 if msg := st.session_state.pop("add_flash", None):
     st.success(msg, icon=":material/check_circle:")
 
-mode = st.segmented_control("Mode", ["Paste an email", "Enter by hand"],
-                            default="Paste an email", key="add_mode",
-                            label_visibility="collapsed") or "Paste an email"
+with st.container(horizontal=True):
+    mode = st.segmented_control("Mode", ["Paste an email", "Enter by hand"],
+                                default="Paste an email", key="add_mode") or "Paste an email"
+    source = st.segmented_control(
+        "Source", data.SOURCES, default=data.SOURCES[0], key="add_source",
+        help="Ag Trader Talk's report emails, or JSA's own reports. JSA sends some of its "
+             "reports to Ag Trader Talk too: when one comes back by email it's matched to "
+             "the stored report, and a repeat the matcher misses is flagged as a duplicate "
+             "on Review & edit.") or data.SOURCES[0]
+jsa = source == "JSA"
 
 
 def _val(v):
@@ -33,8 +41,9 @@ def _val(v):
 
 
 if mode == "Paste an email":
-    st.caption("Paste the subject and body of one of the Ag Trader Talk yield emails. Each report "
-               "in it is checked against the archive and saved with the date you give.")
+    st.caption("Paste the subject and body of a yield report email: one of Ag Trader Talk's, or "
+               "JSA's own (set the source above). Each report in it is checked against the "
+               "archive and saved with the date you give.")
     with st.form("paste_form"):
         subject = st.text_input("Subject", placeholder="YIELD: Le Sueur Co MN soybeans")
         body = st.text_area("Body", height=170,
@@ -117,13 +126,19 @@ if mode == "Paste an email":
                     skipped += 1
                     continue
                 if act == DATE and h:
-                    stored = archive.loc[archive["dedup_hash"] == h, "date_reported"]
-                    old = stored.iloc[0] if len(stored) else None
+                    stored = archive.loc[archive["dedup_hash"] == h]
+                    old = stored["date_reported"].iloc[0] if len(stored) else None
                     if pd.notna(old) and old <= meta["date"]:
                         kept_earlier += 1       # first report date wins
                     else:
                         db.set_reported(h, meta["date"], meta["subject"])
                         dated += 1
+                    if jsa and len(stored) and stored["source"].iloc[0] != "JSA":
+                        # one report, kept once; the note says JSA had it too
+                        note = f"JSA reported this too ({meta['date']:%b %d, %Y})."
+                        prior = stored["notes"].iloc[0]
+                        db.update_row(h, {"notes": f"{prior} {note}" if isinstance(prior, str)
+                                          and prior.strip() else note})
                     continue
                 r = dict(rows[i])
                 for c in PREVIEW_COLS:
@@ -131,7 +146,7 @@ if mode == "Paste an email":
                 r["is_silage"] = bool(r["is_silage"])
                 r["dedup_hash"] = P.dedup_hash(r["crop_year"], r["crop"], r["state"],
                                                r["location"], r["raw_text"] or "")
-                r.update(report_source="email", date_reported=meta["date"],
+                r.update(report_source="jsa" if jsa else "email", date_reported=meta["date"],
                          email_subject=meta["subject"])
                 new_rows.append(r)
             inserted, dupes = db.insert_new(new_rows)
@@ -148,7 +163,8 @@ if mode == "Paste an email":
             st.rerun()
 
 else:
-    st.caption("Key in a report that didn't arrive by email or PDF.")
+    st.caption("Key in a report that didn't arrive by email or PDF: JSA's own, or one of "
+               "Ag Trader Talk's (set the source above).")
     with st.form("manual_form"):
         c1, c2, c3 = st.columns(3)
         year = c1.number_input("Crop year", min_value=2015, max_value=2100,
@@ -182,12 +198,19 @@ else:
                    "aph": aph, "maturity": maturity.strip() or None,
                    "irrigation": irrigation, "disease": ", ".join(disease) or None,
                    "is_silage": is_silage, "is_record": is_record, "raw_text": raw,
-                   "report_source": "manual"}
+                   "report_source": "jsa" if jsa else "manual"}
             row["dedup_hash"] = P.dedup_hash(row["crop_year"], crop, state,
                                              row["location"], raw)
+            _, twin, _ = data.find_match(data.load_all(), row)
+            twin_text = data.describe(data.load_all(), twin) if twin else ""
             inserted, _ = db.insert_new([row])
             data.invalidate()
-            if inserted:
-                st.success("Report saved.", icon=":material/check_circle:")
-            else:
+            if not inserted:
                 st.warning("That exact report is already in the archive — nothing added.")
+            elif twin:
+                st.success("Report saved.", icon=":material/check_circle:")
+                st.info(f"It may repeat a stored report ({twin_text}). If it's the same one, "
+                        "keep one on **Review & edit**: it's flagged there when the place and "
+                        "yield match.", icon=":material/content_copy:")
+            else:
+                st.success("Report saved.", icon=":material/check_circle:")

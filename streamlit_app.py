@@ -1,6 +1,6 @@
 """
-Yield Portal — Ag Trader Talk county yield reports, archived from the annual
-PDFs and the report emails, with entry and review screens.
+Yield Portal — county yield reports from Ag Trader Talk (archived from the annual
+PDFs and the report emails) and JSA's own, with entry and review screens.
 
 Run locally:  streamlit run streamlit_app.py
 

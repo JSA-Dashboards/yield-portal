@@ -39,6 +39,14 @@ gitignored, on Kolten's PC only. Read `CLAUDE.local.md` when it's there.
   (the basis tracker's pending request).
 - **Emails, one at a time**: paste on **Add reports** — same parser and matcher.
 - **By hand**: **Add reports → Enter by hand**.
+- **JSA's own reports**: not every report is Ag Trader Talk's. Add reports has a
+  **Source** switch for both modes; JSA's are stored as `report_source = "jsa"`
+  (`pdf` / `email` / `manual` are Ag Trader Talk's) and shown as the `source`
+  column (`data.SOURCE_LABEL`). JSA sends some of its reports to Ag Trader Talk,
+  who can email them back out: the matcher dates the stored row rather than adding
+  it again (a pasted JSA report that matches an Ag Trader Talk row adds a "JSA
+  reported this too" note), and the `duplicate` check catches a repeat it misses;
+  the review queue shows each copy's source.
 - **Email format traps** (all in `parse_email` / `_email_lines`): the mail
   filter puts the report in `.Body` twice (preview + zero-width padding before
   its banner, real body after) — keep only what follows the banner; `*<tab>`

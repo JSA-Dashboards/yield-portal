@@ -22,7 +22,7 @@ GROUP_GAP = alt.Scale(paddingInner=0.18)      # between a category's year bars
 CATEGORY_GAP = alt.Scale(paddingInner=0.3)    # between categories
 
 st.title("Yield reports")
-st.caption("Ag Trader Talk county field reports, harvest 2023 onward. "
+st.caption("County field reports from Ag Trader Talk and JSA, harvest 2023 onward. "
            "Averages are of the reports themselves, not county or state estimates.")
 
 try:
@@ -61,13 +61,19 @@ with st.sidebar:
                           help="Shows reports naming any of the selected items.")
     silage = st.toggle("Include silage numbers", value=False, key="ex_silage",
                        disabled=crop != "Corn")
+    sources = st.pills("Source", data.SOURCES, selection_mode="multi", default=data.SOURCES,
+                       key="ex_sources",
+                       help="Ag Trader Talk's emails and PDFs, or JSA's own reports.")
     q = st.text_input("Search", placeholder="County, town, or any word", key="ex_q")
 
 if not years:
     st.warning("Pick at least one crop year in the sidebar.")
     st.stop()
+if not sources:
+    st.warning("Pick at least one source in the sidebar.")
+    st.stop()
 
-f = df[(df["crop"] == crop) & (df["crop_year"].isin(years))]
+f = df[(df["crop"] == crop) & (df["crop_year"].isin(years)) & (df["source"].isin(sources))]
 if states:
     f = f[f["state"].isin(states)]
 if irr:
@@ -106,29 +112,32 @@ def _year_table(long_df, value, fmt):
 # --- KPI row: the latest selected year, against the one before it --------------
 latest = max(years)
 prev = max((y for y in years if y < latest), default=None)
-cur = f[f["crop_year"] == latest]
-avg_cur = cur["yield_bpa"].mean()
-avg_prev = f.loc[f["crop_year"] == prev, "yield_bpa"].mean() if prev else float("nan")
-tag_counts = cur["disease"].dropna().str.split(", ").explode().value_counts()
+h = data.headline(f, latest, prev)
+
+
+def _pct(v, suffix=""):
+    return None if v is None or math.isnan(v) else f"{v:+.1f}%{suffix}"
+
 
 with st.container(horizontal=True):
-    st.metric(f"Reports · {latest}", f"{len(cur):,}", border=True,
+    st.metric(f"Reports · {latest}", f"{h['reports']:,}", border=True,
               help="Field reports in the latest selected crop year, after filters.")
-    st.metric(f"Avg reported yield · {latest}", _num(avg_cur, " bpa"),
-              delta=None if math.isnan(avg_prev) or math.isnan(avg_cur)
-              else f"{avg_cur - avg_prev:+.1f} vs {prev}",
+    st.metric(f"Avg reported yield · {latest}", _num(h["avg"], " bpa"),
+              delta=None if math.isnan(h["avg_change"])
+              else f"{h['avg_change']:+.1f} bpa ({h['avg_change_pct']:+.1f}%) vs {prev}",
               border=True,
               help="Simple average of the reported yields. Reports cluster where "
                    "the scouts have contacts, so read it as the tone of the reports.")
-    st.metric("Vs same field last year", _num(cur["vs_ly"].mean(), " bpa", signed=True),
-              border=True,
-              help=f"Average of (yield − last year's yield) over the "
-                   f"{int(cur['vs_ly'].notna().sum())} reports that gave both.")
-    st.metric("Vs APH", _num(cur["vs_aph"].mean(), " bpa", signed=True), border=True,
-              help=f"Average of (yield − APH) over the "
-                   f"{int(cur['vs_aph'].notna().sum())} reports that gave both.")
+    st.metric("Vs same field last year", _num(h["vs_ly"], " bpa", signed=True),
+              delta=_pct(h["vs_ly_pct"], " vs LY"), border=True,
+              help=f"Average of (yield − last year's yield) over the {h['vs_ly_n']} reports "
+                   "that gave both; the % is their gain over last year's bushels.")
+    st.metric("Vs APH", _num(h["vs_aph"], " bpa", signed=True),
+              delta=_pct(h["vs_aph_pct"], " vs APH"), border=True,
+              help=f"Average of (yield − APH) over the {h['vs_aph_n']} reports that gave "
+                   "both; the % is their gain over those APH bushels.")
     st.metric("Most-cited damage",
-              f"{tag_counts.index[0]} ({tag_counts.iloc[0]})" if len(tag_counts) else "—",
+              f"{h['damage'][0]} ({h['damage'][1]})" if h["damage"] else "—",
               border=True, help=f"Most frequent disease / damage tag in {latest}.")
 
 # --- charts -----------------------------------------------------------------
@@ -245,7 +254,7 @@ with st.container(border=True):
 
 # --- the reports themselves ---------------------------------------------------
 cols = ["crop_year", "date_reported", "state", "location", "yield_bpa", "ly_yield",
-        "vs_ly", "aph", "maturity", "irrigation", "disease", "raw_text", "source_file"]
+        "vs_ly", "aph", "maturity", "irrigation", "disease", "raw_text", "source"]
 table = f[cols].sort_values(["crop_year", "state", "location"],
                             ascending=[False, True, True], na_position="last")
 with st.container(border=True):
@@ -269,7 +278,7 @@ with st.container(border=True):
             "irrigation": "Irrigation",
             "disease": "Disease / damage",
             "raw_text": st.column_config.TextColumn("Report", width="large"),
-            "source_file": "Source",
+            "source": "Source",
         },
     )
     if not VIEW_ONLY:

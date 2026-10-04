@@ -105,6 +105,30 @@ pulled = analysis.counties(rep.assign(county_names=[["PEORIA"], []]), state_medi
 check("one report is pulled most of the way to the state: (1x1.10 + 3x1.20)/4",
       round(pulled.loc[0, "pulled"], 4), round((1.10 + 3 * 1.20) / 4, 4))
 
+# --- the headline tiles (Explore and the weekly email) ------------------------------------
+import data  # noqa: E402
+
+tiles = pd.DataFrame({
+    "crop_year": [2026, 2026, 2026, 2025, 2025],
+    "yield_bpa": [220.0, 240.0, 260.0, 200.0, 220.0],
+    "ly_yield": [200.0, None, 250.0, None, None],
+    "aph": [None, 200.0, None, None, None],
+    "disease": ["Tar spot", "Tar spot, Hail", None, "Hail", None],
+})
+tiles["vs_ly"] = tiles["yield_bpa"] - tiles["ly_yield"]
+tiles["vs_aph"] = tiles["yield_bpa"] - tiles["aph"]
+h = data.headline(tiles, 2026, 2025)
+check("tiles: count, average and its change in bpa and %",
+      (h["reports"], h["avg"], h["avg_change"], round(h["avg_change_pct"], 2)),
+      (3, 240.0, 30.0, round((240 / 210 - 1) * 100, 2)))
+check("vs LY: mean gain over the reports giving both, % of their LY bushels",
+      (h["vs_ly"], round(h["vs_ly_pct"], 2), h["vs_ly_n"]), (15.0, round(30 / 450 * 100, 2), 2))
+check("vs APH", (h["vs_aph"], h["vs_aph_pct"], h["vs_aph_n"]), (40.0, 20.0, 1))
+check("most-cited damage in the latest year", h["damage"], ("Tar spot", 2))
+first = data.headline(tiles, 2025)
+check("no earlier year: no change", (first["avg_change"] != first["avg_change"],
+                                     first["vs_aph_n"]), (True, 0))
+
 if failures:
     print(f"{len(failures)} FAILED:")
     for f in failures:
