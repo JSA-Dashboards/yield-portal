@@ -131,6 +131,43 @@ rows = email("YIELD: IL corn",
 check("'236 avg'", rows[0]["yield_bpa"], 236)
 
 
+# --- numbers that look like yields but aren't (each once became a yield) ------
+def yields(text):
+    return P.extract_yields(text)
+
+
+check("a planting date is not the low end of a range",
+      yields("Story Co, IA: 104 day corn planted 4/12 – 241 bu/acre dry.")[0], [241])
+check("a road number is not a yield", yields("Field along Hwy 30- 66 bpa on beans.")[0], [66])
+check("'160 A' is acres; '71.4 ave' the yield; '64 LY' last year",
+      yields("Boone Co, IA: 160 A 71.4 ave 64 LY")[:2], ([71.4], [64]))
+check("'30-50 bu higher YoY' is a change, the yields are in brackets",
+      yields("Silage appraisals running 30-50 bu higher YoY (210-240 bpa).")[0], [210, 240])
+check("'15-25 bu difference' is a difference",
+      yields("Adjusters seeing 15-25 bu difference with fungicide.")[0], [])
+check("'silage estimate 218'", yields("Silage estimate 218 this year.")[0], [218])
+check("'248 A lot' — an 'A' before a word isn't acres",
+      P.extract_yields("Linn Co, IA 248 A lot of fields like it.")[0], [248])
+check("a 'last year' that opens its own clause belongs to the next figure",
+      yields("Silage estimate 231, fwiw last year silage estimate was 238.")[:2], ([231], [238]))
+check("...also after a unit", yields("Made 68 bpa, last year was 73 on that farm.")[0], [68])
+check("'better than expected 140 bpa' — 140 is the yield",
+      yields("Yields better than expected 140 bpa.")[0], [140])
+check("'vs.73 bpa last year' (no space after the stop) is still last year",
+      yields("A field made 43 bpa, vs.73 bpa last year.")[:2], ([43], [73]))
+check("'expected 220bpa' alone is still the expectation",
+      yields("Yield 47 bpa expected 220bpa after hail.")[::2], ([47], [220]))
+
+# --- PDF lines: a report per place, even without a separator --------------------
+rows = P.parse_lines(["Corn", "Piatt Co IL Harvest started, 228 bpa dry.",
+                      "Macon Co, IL 30 acres did 241 bpa", "Howard Co – 150 bpa",
+                      "Alma, MO 16-20% moisture, 205 bpa"], 2026)
+check("'Place Co, ST' and 'Town, ST' open reports; a county with no state keeps the last one",
+      [(r["location"], r["state"], r["yield_bpa"]) for r in rows],
+      [("Piatt Co", "IL", 228), ("Macon Co", "IL", 241), ("Howard Co", "IL", 150),
+       ("Alma", "MO", 205)])
+
+
 # --- the archive matcher -----------------------------------------------------
 def stored(**kw):
     base = dict(crop_year=2026, crop="Corn", state="IL", location=None, yield_bpa=None,

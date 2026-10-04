@@ -73,11 +73,17 @@ _TITLE = {ab.title(): ab for ab in ABBRS}
 TITLE_CO_RE = re.compile(
     r"^([A-Z][\w.' ]{0,30}?\s(?:Co\.?|County))[, ]+(%s)\b" % "|".join(_TITLE))
 # No separator after the state (common in 2023): "Shelby Co IL 280 acres",
-# "Tuscola IL 22 acres". The place must be 1-2 capitalised words (+ optional county
-# word) so "Great IL crop"-style sentences rarely qualify.
+# "Tuscola IL 22 acres", and with a comma: "Macon Co, IL 30 acres", "Elgin, IA 18-20%"
+# (without the comma form, those lines were glued onto the report above them). The
+# place must be 1-2 capitalised words (+ optional county word) so "Great IL
+# crop"-style sentences rarely qualify.
 LOOSE_RE = re.compile(
-    r"^([A-Z][a-z.']+(?:\s+[A-Z][a-z.']+)?(?:\s+(?:Co\.?|County|Parish))?)\s+(%s)\b"
+    r"^([A-Z][a-z.']+(?:\s+[A-Z][a-z.']+)?(?:\s+(?:Co\.?|County|Parish))?),?\s+(%s)\b"
     % "|".join(ABBRS))
+# A county with no state, then a separator: "Polk Co – 150 bpa" in a run of
+# Iowa reports. Starts a new report in the state of the one before it.
+NOSTATE_CO_RE = re.compile(
+    r"^((?:[A-Z][a-z.']+\s+){1,2}(?:Co\.?|County|Parish))\s*[–—:\-]\s")
 # Regional block led by the state itself: "AR Delta:", "MS yields –", "AR –".
 LEAD_STATE_RE = re.compile(
     r"^(%s)\b\s*([A-Za-z ]*?)\s*%s" % ("|".join(ABBRS), _SEP))
@@ -85,7 +91,8 @@ LEAD_STATE_RE = re.compile(
 
 def parse_location(line):
     """Return (location, state_abbr). location may be None for a regional block
-    led by the state; state is None when the line starts no observation."""
+    led by the state; state is None when the line starts no observation, and ""
+    for a county that names no state (the caller carries the previous one)."""
     m = LEAD_STATE_RE.match(line)
     if m:
         return (m.group(2).strip() or None), m.group(1)
@@ -101,6 +108,9 @@ def parse_location(line):
     m = LOOSE_RE.match(line)
     if m:
         return m.group(1).strip(), m.group(2)
+    m = NOSTATE_CO_RE.match(line)
+    if m:
+        return m.group(1).strip(), ""
     return None, None
 
 
@@ -121,10 +131,15 @@ def is_continuation(line):
 # --- metric extraction over raw text ---------------------------------------
 # A yield is a number followed by a yield unit; an optional "lo-" / "lo to"
 # prefix captures ranges ("225-230 bpa"). "230 dry" means 230 bu dry.
+# (?<![/\d]) keeps a date out of a range: "planted 4/12 – 241 bu/acre" is 241,
+# not 12-241. (?<!\d\.) skips the tail of a decimal but still reads "vs.73 bpa".
 YIELD_RE = re.compile(
-    r"(?:(\d{2,3})\s*(?:-|–|to)\s*)?(\d{2,3}(?:\.\d+)?)\+?\s*-?\s*"   # "80+ bpa", "214-BPA"
-    r"(?:bpa|bu(?:shels?)?(?:\s*/\s*ac(?:re)?|\s+per\s+acre)?|dry)\b",
+    r"(?:(?<![/\d])(?<!\d\.)(\d{2,3})\s*(?:-|–|to)\s*)?(?<![/\d])(?<!\d\.)(\d{2,3}(?:\.\d+)?)"
+    r"\+?\s*-?\s*"
+    r"(?:bpa|bu(?:shels?)?(?:\s*/\s*ac(?:re)?|\s+per\s+acre)?|dry)\b",   # "80+ bpa", "214-BPA"
     re.IGNORECASE)
+# A road number is not a yield: "along Hwy 30- 66 bpa" is 66.
+_ROAD = re.compile(r"(?:hwy|highway|route|rte|interstate|i-)\s*$", re.I)
 # Context classifiers. A line usually mixes this year's yield with last year's,
 # the expectation, and differences ("down 12 bu", "20 bpa less than APH");
 # only the first kind is the observation's yield.
@@ -186,28 +201,42 @@ _EXP_POST = re.compile(
     r"^\W{0,3}(expect\w*|estimat\w*)\b"
     r"(?!\W{0,3}\d{2,3}(?:\.\d+)?(?!\d)(?!\.\d)(?!\s*%))", re.I)
 _EXP_PRE = re.compile(r"(expect\w*|hop\w* (?:for|to))\W{0,10}$", re.I)
+# ...but "better than expected 140 bpa" is a finished comparison: 140 is the yield.
+_EXP_DONE = re.compile(r"\b(?:than|as)\s+expected\W{0,3}$", re.I)
+# A "last year" right after a figure that opens its own clause belongs to the next
+# figure: in "estimate 231, fwiw last year silage estimate was 238", 238 is last
+# year's and 231 this year's; likewise "made 68, last year was 73".
+_LY_LEADS = re.compile(r"^[^\d.;]{0,30}?\b(?:was|were|at|of|made|did|went)\s+\d{2,3}", re.I)
 # "less/more than" marks a difference at any size ("40 to 60 bushel less than
 # last year"), unlike "better than", which also follows real yields.
 _LESS_MORE = re.compile(r"^\s*(?:\w+\s+)?(less|more|fewer)\s+than\b", re.I)
+# So do a year-on-year change and a named difference, at any size: "silage
+# running 30-50 bu higher YoY (210-240 bpa)", "seeing 15-25 bu difference".
+_DIFF_POST = re.compile(
+    r"^\s*(?:(?:higher|lower|more|less|better|worse|up|down)\s+"
+    r"(?:yoy|y/y|year[- ]over[- ]year)\b|(?:of\s+)?(?:difference|swing|spread)\b)", re.I)
 _APH_PRE = re.compile(r"aph\W{0,8}$", re.I)
 
 
 # What must NOT follow a bare yield number: moisture/acres/maturity/test-weight
 # units, a unit we already parse (handled by YIELD_RE), or the start of a range
-# like "20-22%" (which would otherwise read as 20).
+# like "20-22%" (which would otherwise read as 20). Case-insensitive even inside
+# LEAD_NUMBER_RE, so "160 A 71.4 ave" reads 160 as acres; an "a" before a word
+# ("248 A lot of...") is not acres.
 _NOT_YIELD_TAIL = (    # (?!\.\d) not (?![\d.]): "corn avg 238." ends a sentence
-    r"(?!\d)(?!\.\d)(?!\s*(?:%|acres?\b|ac\b|a\b|-?day|#|lbs?\b|tw\b|test|mst|moist|"
-    r"degree|tons?\b|bu|bpa|ft\b|inch)|\s*(?:-|–|to)\s*\d)")
+    r"(?!\d)(?!\.\d)(?!(?i:\s*(?:%|acres?\b|ac\b|a\b(?!\s+[a-z])|-?day|#|lbs?\b|tw\b|test|"
+    r"mst|moist|degree|tons?\b|bu|bpa|ft\b|inch)|\s*(?:-|–|to)\s*\d))")
 # Unit-less yields after a harvest verb: "went 287", "running 240-280",
 # "LY was 259", "in the 190 range". Only consulted when no unit-bearing current
 # yield was found.
 BARE_YIELD_RE = re.compile(
     r"\b(?:went|made|averag(?:ed|ing)|avg|yielded|came in at|running|ran|did|"
-    r"making|was|yields?(?:\s+of)?|in the)\s+"
+    r"making|was|yields?(?:\s+of)?|in the|"
+    r"estimate[ds]?|apprais(?:ed|ing|al)(?:\s+(?:at|of))?)\s+"     # "silage estimate 218"
     r"(?:about\s+|around\s+|right at\s+|roughly\s+)?"
     r"(\d{2,3}(?:\.\d+)?)(?:\s*(?:-|–|to)\s*(\d{2,3}(?:\.\d+)?))?" + _NOT_YIELD_TAIL,
     re.I)
-POST_AVG_RE = re.compile(r"(?<![\d.])(\d{2,3}(?:\.\d+)?)\s+(?:avg|average)\b", re.I)
+POST_AVG_RE = re.compile(r"(?<![\d.])(\d{2,3}(?:\.\d+)?)\s+(?:avg|ave|average)\b", re.I)
 # A bare expectation: "went 54.5 bpa, expected 42."
 EXP_NUM_RE = re.compile(
     r"\bexpect(?:ed|ing|ation)?\s+(?:about\s+|around\s+)?(\d{2,3}(?:\.\d+)?)"
@@ -227,14 +256,17 @@ def _classify(text, start, end, val, cur, ly, exp, lo=None):
     # a small number with a comparison word after it is a difference,
     # not a yield ("10 bpa better than LY"); "245 bpa, better than APH" is a yield
     if (_PRE_DELTA.search(before) or (val < 45 and _POST_DELTA.match(after))
-            or _LESS_MORE.match(after)):
+            or _LESS_MORE.match(after) or _DIFF_POST.match(after)):
         return
     if _APH_PRE.search(before):
         return
-    if _LY_POST.match(after) or _ly_before(long_before):
+    ly_after = _LY_POST.match(after)
+    if ly_after and _LY_LEADS.match(text[end + ly_after.end(): end + ly_after.end() + 45]):
+        ly_after = None
+    if ly_after or _ly_before(long_before):
         ly.append(val)
         return
-    if _EXP_POST.match(after) or _EXP_PRE.search(before):
+    if _EXP_POST.match(after) or (_EXP_PRE.search(before) and not _EXP_DONE.search(before)):
         exp.append(val)
         return
     if not (10 <= val <= 400):
@@ -248,7 +280,11 @@ def extract_yields(text):
     """-> (current, last_year, expected) lists of bu/ac values."""
     cur, ly, exp = [], [], []
     for m in YIELD_RE.finditer(text):
+        if _ROAD.search(text[max(0, m.start(2) - 12): m.start(2)]):
+            continue
         lo = float(m.group(1)) if m.group(1) else None
+        if lo is not None and _ROAD.search(text[max(0, m.start(1) - 12): m.start(1)]):
+            lo = None
         _classify(text, m.start(), m.end(), float(m.group(2)), cur, ly, exp, lo)
     for m in PRE_UNIT_RE.finditer(text):
         _classify(text, m.start(), m.end(), float(m.group(1)), cur, ly, exp)
@@ -480,6 +516,8 @@ def parse_lines(lines, crop_year, default_crop=None, source_file=None,
             state_hdr = STATE_ABBR[ln.upper()]
             continue
         loc, st = parse_location(ln)
+        if st == "":                    # a county with no state: the last report's state
+            st = (cur or {}).get("state") or state_hdr
         starts_new = st is not None and not is_continuation(ln)
         if starts_new:
             flush()

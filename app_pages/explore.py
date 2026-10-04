@@ -35,6 +35,13 @@ except Exception as exc:                  # e.g. the database login is refused
 if df.empty:
     st.info("No reports yet. Load them on **Import PDF** or **Add reports**.")
     st.stop()
+# Only reports that passed the checks or that a person approved; flagged ones
+# wait on Review & edit, excluded ones stay in the archive (Report text).
+waiting = int((df["status"] == "flagged").sum())
+df = df[df["status"].isin(["clean", "approved"])]
+if waiting and not VIEW_ONLY:
+    st.caption(f":material/rule: {waiting:,} reports are waiting on **Review & edit** and "
+               "aren't counted here until they're cleared.")
 
 years_all = sorted(int(y) for y in df["crop_year"].dropna().unique())
 YEAR_COLOR = alt.Color("crop_year:N", title="Year", scale=data.year_scale(years_all))

@@ -111,6 +111,7 @@ def main():
 
     archive = data.frame()
     applied = set(archive["email_id"].dropna())
+    archive = archive[archive["status"] != "superseded"].reset_index(drop=True)
     emails = read_emails()
     seen_ids = {e["msgid"] for e in emails}
     emails += [e for e in read_msg_files(args.msg) if e["msgid"] not in seen_ids]
