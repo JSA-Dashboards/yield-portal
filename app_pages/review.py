@@ -5,7 +5,9 @@ import streamlit as st
 import checks
 import data
 import db
+import nass
 import parse_pdfs as P
+import places
 import report_text as RT
 
 STATES = sorted(P.ABBRS)
@@ -52,10 +54,54 @@ def _place(r):
     return ", ".join(str(v) for v in (r["location"], r["state"]) if isinstance(v, str) and v)
 
 
+MODES = {"queue": f"Needs review ({len(queue_all)})", "places": "Places", "all": "All reports"}
 mode = st.segmented_control(
-    "Show", ["queue", "all"], default="queue" if len(queue_all) else "all", key="rev_mode",
-    format_func=lambda k: f"Needs review ({len(queue_all)})" if k == "queue" else "All reports",
-    label_visibility="collapsed") or "queue"
+    "Show", list(MODES), default="queue" if len(queue_all) else "all", key="rev_mode",
+    format_func=MODES.get, label_visibility="collapsed") or "queue"
+
+# --- county matches waiting for a person -------------------------------------------
+if mode == "places":
+    st.caption("Place names that may be a NASS county: a near-spelling (\"Vermillion Co\") or a "
+               "town that shares a county's name (\"Peoria\"). Confirm and those reports use the "
+               "county's NASS yields on Reports vs normal; reject and they keep the state's. "
+               "The reports themselves don't change.")
+    county_raw, _, _ = nass.load(int(df["crop_year"].max()))
+    if county_raw.empty:
+        st.info("County matching needs the shared NASS cache on Snowflake.",
+                icon=":material/cloud_off:")
+        st.stop()
+    m = places.match_all(df, nass.county_index(county_raw), places.cached_decisions())
+    sug = m[m["county_method"] == "suggested"]
+    if sug.empty:
+        st.success("No place names waiting for a county.", icon=":material/task_alt:")
+        st.stop()
+    groups = (sug.groupby(["state", "place_key"])
+              .agg(place=("location", "first"), suggestion=("county_suggestion", "first"),
+                   counties=("county_names", "first"), fips=("county_fips", "first"),
+                   reports=("dedup_hash", "size"))
+              .reset_index().sort_values(["state", "place"]).reset_index(drop=True))
+    st.text_input("Reviewed by", placeholder="Your initials", key="rev_who", width=160)
+    event = st.dataframe(
+        groups[["state", "place", "suggestion", "reports"]], hide_index=True,
+        on_select="rerun", selection_mode="multi-row",
+        key=f"rev_places_{st.session_state.get('rev_gen', 0)}",
+        column_config={"state": st.column_config.TextColumn("State", width="small"),
+                       "place": "As written", "suggestion": "Suggested NASS county",
+                       "reports": st.column_config.NumberColumn("Reports", width="small")})
+    picked = groups.iloc[event.selection.rows]
+    with st.container(horizontal=True):
+        if st.button(f"Confirm {len(picked)} selected", type="primary", icon=":material/check:",
+                     disabled=picked.empty):
+            for g in picked.to_dict("records"):
+                places.decide(g["state"], g["place_key"], "confirmed",
+                              [c for c in g["counties"]], [f for f in g["fips"]], _who())
+            _done(f"Confirmed {len(picked)} county match(es).")
+        if st.button(f"Reject {len(picked)} selected", icon=":material/close:",
+                     disabled=picked.empty):
+            for g in picked.to_dict("records"):
+                places.decide(g["state"], g["place_key"], "rejected", decided_by=_who())
+            _done(f"Rejected {len(picked)}; those reports keep the state's numbers.")
+    st.stop()
 
 # --- the review queue -----------------------------------------------------------
 if mode == "queue":
