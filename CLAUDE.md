@@ -230,8 +230,9 @@ programmes are off by default and the page says why.
 ## Strip trials — ISA's on-farm trials (internal)
 
 **Strip trials** puts the Iowa Soybean Association's replicated on-farm strip trials
-(about 4,800 since 2005, every one in Iowa) beside NASS: each trial is one real field, so
-its yield is read against its county's NASS yield (the cache has counties from 2015) and
+(about 4,800 since 2005, all but one in Iowa) beside NASS: each trial is one real field,
+so its yield is read against its county's NASS yield (the cache has counties from 2015;
+about 95% of 2015-2025 trials have one, the rest sit in counties NASS didn't publish) and
 Iowa's. One table, `ISA_STRIP_TRIALS`, owned by `isa_trials.py`, dropped and rebuilt on
 load like the trial tables.
 
