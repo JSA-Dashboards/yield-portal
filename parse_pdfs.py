@@ -48,6 +48,9 @@ STATE_HDR_RE = re.compile(
 
 CROP_HDR_RE = re.compile(
     r"^(corn|soybeans?|beans|wheat|milo|sorghum|silage)\s*:?\s*$", re.IGNORECASE)
+# Soybean yields stop here (bpa): past it a report can only be corn. The review
+# checks' "corn?" flag and an email report that names no crop both use it.
+SOY_MAX = 100
 
 
 def norm_crop(s):
@@ -840,6 +843,13 @@ def parse_email(subject, body, crop_year, date_reported=None):
         known = r.get("crop") if r.get("crop") not in (None, "Unknown") else None
         r["crop"] = known or email_crop("", r["raw_text"]) or subject_crop
         r.update(extract_metrics(r["raw_text"], r["crop"]))
+        if r["crop"] is None and (r.get("yield_bpa") or 0) > SOY_MAX:
+            # no crop named anywhere ("Lee Co IA - 245 bpa, same as last year"), but
+            # only corn runs past 100 bpa: corn, and the row says why. At 100 or
+            # under either crop is possible, so it waits on Review & edit.
+            r["crop"] = "Corn"
+            r.update(extract_metrics(r["raw_text"], "Corn"))
+            r["notes"] = "Crop from the yield: none named, and over 100 bpa is corn."
         if all_silage:              # "YIELD: NC IA silage numbers"
             r["is_silage"] = True
         r["dedup_hash"] = dedup_hash(crop_year, r["crop"], r["state"], r["location"],

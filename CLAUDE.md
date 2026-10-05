@@ -64,6 +64,11 @@ gitignored, on Kolten's PC only. Read `CLAUDE.local.md` when it's there.
   "-Linn Co-Central MO- 100 acres" bullets (dash with no space, hyphens for
   commas, region before the state: `HYPHEN_CO_RE`) and "Greene County-picked"
   (`NOSTATE_CO_RE` takes a hyphen running straight into the text, not "Co-op").
+- **No crop named anywhere** (not in the line, a header or the subject): over
+  `P.SOY_MAX` (100 bpa) the report is corn, filed with a note saying the crop
+  came from the yield. At 100 or under either crop is possible, so it's stored
+  crop-less and waits on Review & edit (Kolten: "apply the yield range logic …
+  or at minimum ask me").
 
 `dedup_hash` (year | crop | state | location | whitespace-normalised text) is the
 row identity, computed once at ingest and never recomputed, so editing a row and
@@ -77,7 +82,7 @@ came in by, and never changes a report — it raises flags:
 
 | flag | rule | suggested fix |
 |---|---|---|
-| `incomplete` | no crop or no state (an email nobody could place) | crop → Corn when the state is known and the yield is over 100 bpa; else set by hand |
+| `incomplete` | no crop or no state (an email nobody could place) | crop → Corn when the state is known and the yield is over 100 bpa (new emails get that at parse time); else set by hand |
 | `split` | yields for both corn and soybeans in one report (`parse_pdfs.split_by_crop`) | one report per crop; the original is marked `superseded` |
 | `range` | corn outside 50–300 bpa, soybeans under 10 | — |
 | `corn?` | soybeans over 100 bpa (corn filed under the soybean header) | crop → Corn |

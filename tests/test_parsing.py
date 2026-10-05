@@ -282,6 +282,16 @@ check("each bullet is a report; a heading gives the state to those that name non
        ("Doniphan Co", "KS", 140), ("NW", "KS", None), ("Logan Co", "KS", 40)])
 check("'Farmers Co-op' doesn't open a report", P.parse_location("Farmers Co-op said 200 bpa"),
       (None, None))
+
+# --- no crop named anywhere: the yield decides past 100 bpa, else a person does ---------
+rows = email("YIELD: Various IA locations",
+             "Adams Co IA - 226 bpa, down 15 from same field last year\n"
+             "Clark Co IA - 62 bpa, on par with last year\n"
+             "Linn Co IA - 231 bpa corn vs same field 265 in 2024")
+check("over 100 bpa with no crop named is corn (and says so); 62 bpa is left for a person",
+      [(r["location"], r["crop"], r["yield_bpa"], bool(r.get("notes"))) for r in rows],
+      [("Adams Co", "Corn", 226, True), ("Clark Co", None, 62, False),
+       ("Linn Co", "Corn", 231, False)])
 check("a conversation with the source isn't a report", P.is_report_subject("RE: Yields Sharing"), False)
 check("a correction is", P.is_report_subject("CORRECTION: YIELD: Nebraska corn"), True)
 check("a forward whose header can't be read is left alone",
