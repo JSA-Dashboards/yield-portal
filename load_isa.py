@@ -26,6 +26,7 @@ import pathlib
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -51,8 +52,10 @@ def _get(url, tries=3):
     for i in range(tries):
         try:
             return urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=120).read()
-        except Exception:
-            if i == tries - 1:
+        except Exception as exc:
+            # 404: a report the list links but ISA doesn't have (many 2006 "A"/"B" trials)
+            gone = isinstance(exc, urllib.error.HTTPError) and exc.code == 404
+            if gone or i == tries - 1:
                 raise
             time.sleep(10 * (i + 1))
 
@@ -103,7 +106,9 @@ def fetch(last_year: int):
         time.sleep(PAUSE)
     with open(DATA / "failed.csv", "w", newline="", encoding="utf-8") as f:
         csv.writer(f).writerows(failed)
-    print(f"done: {len(todo) - len(failed)} fetched, {len(failed)} failed", flush=True)
+    gone = sum("404" in why for _, why in failed)
+    print(f"done: {len(todo) - len(failed)} fetched, {len(failed)} failed "
+          f"({gone} not on ISA's server)", flush=True)
 
 
 def main():
