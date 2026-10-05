@@ -243,8 +243,11 @@ python load_isa.py load [--target snowflake]   # read the text, replace the tabl
 
 `fetch` takes ISA's public database one year at a time (all years at once gives an HTTP
 500), then each trial's PDF report with a 2 s pause, keeping only its text
-(`data/isa/text/<trial id>.txt`) and skipping what's cached. The first run takes about 5 h,
-so it runs on the Droplet. `data/` is gitignored: the repo is public.
+(`data/isa/text/<trial id>.txt`) and skipping what's cached. The first run takes about 3 h,
+so it runs on the Droplet. `data/` is gitignored: the repo is public. **Case trap:** the list
+links `ST2006128A_Final_Report.pdf` where ISA's case-sensitive server has `ST2006128a_…`
+(a 404), so `_report` retries with the suffix letter's case swapped. A 404 is never retried
+as-is.
 
 The yields are only in the reports, which have changed layout several times
 (`isa_trials.LAYOUTS`, named by the first season seen). **ISA's listed response is the
