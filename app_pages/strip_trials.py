@@ -73,8 +73,8 @@ def strip_trials():
         st.metric("Field over its county", f"{paired.median():+.1%}" if len(paired) else "—",
                   border=True,
                   help="Each trial's yield over its county's NASS yield that season, the "
-                       "median across trials (%d paired). NASS county yields in the cache "
-                       "start in 2015." % len(paired))
+                       "median across trials (%d paired). A county NASS didn't publish that "
+                       "season has no figure." % len(paired))
         st.metric("Field over Iowa", f"{read.vs_state.median():+.1%}"
                   if read.vs_state.notna().any() else "—", border=True,
                   help="Each trial's yield over Iowa's NASS yield that season, the median "
@@ -119,9 +119,9 @@ def strip_trials():
                          alt.Tooltip("trials:Q", title="Trials read")])
             st.altair_chart(alt.layer(solid, dashed, marks, tips).properties(height=360))
             st.caption("Mean yield of the season's read trials, and the mean NASS yield of "
-                       "the counties they sat in (2015 on, where NASS published the "
-                       "county). The trials move from county to county every year, so read "
-                       "the gap between the two lines, not the level of either.")
+                       "the counties they sat in (where NASS published the county). The "
+                       "trials move from county to county every year, so read the gap "
+                       "between the two lines, not the level of either.")
         else:
             shown = season.drop(columns="crop").sort_values("year", ascending=False)
             shown[["over_county", "over_state"]] *= 100

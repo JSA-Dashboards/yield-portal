@@ -173,8 +173,8 @@ def load_from_cache(list_csv, text_dir, target):
 
 
 def with_nass(d: pd.DataFrame, county_raw: pd.DataFrame, state_tbl: pd.DataFrame) -> pd.DataFrame:
-    """+ county_final (the county's NASS yield that season, where the cache has it:
-    2015 on), state_final (Iowa's final) and the field over each, as fractions
+    """+ county_final (the county's NASS yield that season, where NASS published
+    it; cached from 2005), state_final (Iowa's final) and the field over each, as fractions
     (vs_county, vs_state). county_raw is nass.load's county frame, so an ISA county
     is matched by name ("O'Brien" = NASS "O BRIEN")."""
     d = d.copy()

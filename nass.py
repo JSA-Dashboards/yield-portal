@@ -5,17 +5,18 @@ keys are issued per person, so a shared app reads the cache instead.
 
 Two cached query shapes cover everything. They must stay identical to the job
 lists that fill them, or the cache key misses and the page goes blank:
-  county yields  one query per crop and year, every county
-                 (usda-nass-etl jobs/rma_map.py, the first COUNTY family)
+  county yields  one query per crop and year, every county, 2005 on
+                 (usda-nass-etl jobs/yield_portal.py, weekly)
   state yields   every state yield since 1980, finals and monthly forecasts
                  (usda-nass-etl jobs/domestic_production.py)
+
+Snowflake flattens the cached payloads and returns only the fields used here:
+a county year's whole payload is 1-2 MB, so the 44 county keys would be ~80 MB.
 
 For the crop year still in progress, NASS's "YEAR" row is USDA's latest
 forecast, not a final: a YEAR row counts as final only when it was loaded after
 the January following that harvest.
 """
-import json
-
 import pandas as pd
 import streamlit as st
 
@@ -24,7 +25,7 @@ import nass_cache_client as ncc
 
 COMMODITY = {"Corn": {"commodity_desc": "CORN", "util_practice_desc": "GRAIN"},
              "Soybeans": {"commodity_desc": "SOYBEANS"}}
-FIRST_YEAR = 2015                     # the rma_map job list caches county yields from 2015
+FIRST_YEAR = 2005                     # = usda-nass-etl jobs/yield_portal.FIRST_YEAR (ISA trials)
 CACHE_TABLE = "JSA.NASS_CACHE.NASS_CACHE"
 AVG_YEARS = 5                         # "normal" = average of the 5 finals before the year
 MIN_AVG_YEARS = 3                     # ...from at least 3 published years
@@ -53,13 +54,24 @@ def _num(v):
 
 @db._retry_once
 def _fetch(keys: tuple):
-    """The cache rows for `keys`, over the app's shared Snowflake session."""
+    """The records cached under `keys`, over the app's shared Snowflake session:
+    one row per ALL PRODUCTION PRACTICES record, (cache_key, fetched_at, year,
+    state_alpha, county_name, state_fips_code, county_ansi, Value,
+    reference_period_desc, load_time). A key with no records still gives one
+    row, all NULL past fetched_at, so it counts towards as_of."""
     conn = db.sf_connect()
     try:
         cur = conn.cursor()
-        cur.execute(f"SELECT cache_key, data, fetched_at FROM {CACHE_TABLE} "
-                    f"WHERE error IS NULL AND cache_key IN ({', '.join(['%s'] * len(keys))})",
-                    keys)
+        cur.execute(
+            "SELECT c.cache_key, c.fetched_at, r.value:year::string, r.value:state_alpha::string, "
+            "r.value:county_name::string, r.value:state_fips_code::string, "
+            "r.value:county_ansi::string, r.value:Value::string, "
+            "r.value:reference_period_desc::string, r.value:load_time::string "
+            f"FROM {CACHE_TABLE} c, LATERAL FLATTEN(input => c.data:data, outer => TRUE) r "
+            f"WHERE c.error IS NULL AND c.cache_key IN ({', '.join(['%s'] * len(keys))}) "
+            "AND (r.value IS NULL "
+            "OR r.value:prodn_practice_desc::string = 'ALL PRODUCTION PRACTICES')",
+            keys)
         return cur.fetchall()
     finally:
         conn.close()
@@ -79,23 +91,18 @@ def load(through_year: int):
         wanted[ncc._cache_key("api_GET", state_params(crop))] = ("state", crop)
         for y in range(FIRST_YEAR, through_year + 1):
             wanted[ncc._cache_key("api_GET", county_params(crop, y))] = ("county", crop)
-    hits = _fetch(tuple(wanted))
     county, state, as_of = [], [], None
-    for key, data, fetched in hits:
-        kind, crop = wanted[key]
-        recs = (data if isinstance(data, (dict, list)) else json.loads(data)).get("data", [])
+    for key, fetched, year, st_, name, st_fips, ansi, value, period, loaded in _fetch(tuple(wanted)):
         as_of = max(as_of, fetched) if as_of else fetched
-        for r in recs:
-            if r.get("prodn_practice_desc") != "ALL PRODUCTION PRACTICES":
+        if year is None:                    # a cached key with no records
+            continue
+        kind, crop = wanted[key]
+        if kind == "county":
+            if not ansi or "OTHER" in (name or ""):
                 continue
-            if kind == "county":
-                if not r.get("county_ansi") or "OTHER" in (r.get("county_name") or ""):
-                    continue
-                county.append((crop, int(r["year"]), r["state_alpha"], r["county_name"],
-                               r["state_fips_code"] + r["county_ansi"], _num(r["Value"])))
-            elif r.get("state_alpha") not in ("US", "OT"):
-                state.append((crop, int(r["year"]), r["state_alpha"], r["reference_period_desc"],
-                              _num(r["Value"]), r.get("load_time") or ""))
+            county.append((crop, int(year), st_, name, st_fips + ansi, _num(value)))
+        elif st_ not in ("US", "OT"):
+            state.append((crop, int(year), st_, period, _num(value), loaded or ""))
     return (pd.DataFrame(county, columns=county_cols).dropna(subset=["yield"]),
             pd.DataFrame(state, columns=state_cols).dropna(subset=["yield"]), as_of)
 

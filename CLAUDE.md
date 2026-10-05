@@ -147,9 +147,11 @@ page reads each season against the same ratios in earlier seasons, never against
 NASS comes **only** from the fleet's cache (`nass.py`), never the live API: one
 Snowflake query for the county-yield and state-yield rows, keyed with the vendored
 `nass_cache_client._cache_key` (keep that file byte-identical to usda-nass-etl's).
-`nass.county_params` / `state_params` must match `jobs/rma_map.py` (first COUNTY
-family) and `jobs/domestic_production.py` exactly, or the key misses and the page
-goes blank. The current season's NASS "YEAR" row is USDA's latest forecast, not a
+`nass.county_params` / `state_params` must match `jobs/yield_portal.py` (county
+yields, 2005 on, weekly) and `jobs/domestic_production.py` exactly, or the key misses
+and the page goes blank; `nass.FIRST_YEAR` and the job list's `FIRST_YEAR` move
+together. Snowflake flattens the payloads to the fields used (`nass._fetch`):
+whole payloads are 1-2 MB a county year. The current season's NASS "YEAR" row is USDA's latest forecast, not a
 final: it counts as final only when loaded after the following January. The
 portal's role needs SELECT on `JSA.NASS_CACHE.NASS_CACHE` (granted 2026-10-04).
 
@@ -231,8 +233,8 @@ programmes are off by default and the page says why.
 
 **Strip trials** puts the Iowa Soybean Association's replicated on-farm strip trials
 (about 4,800 since 2005, all but one in Iowa) beside NASS: each trial is one real field,
-so its yield is read against its county's NASS yield (the cache has counties from 2015;
-about 95% of 2015-2025 trials have one, the rest sit in counties NASS didn't publish) and
+so its yield is read against its county's NASS yield (cached from 2005: every trial
+through 2014 has one, about 95% since, as NASS stopped publishing some counties) and
 Iowa's. One table, `ISA_STRIP_TRIALS`, owned by `isa_trials.py`, dropped and rebuilt on
 load like the trial tables.
 
