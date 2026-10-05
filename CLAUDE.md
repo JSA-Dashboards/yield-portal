@@ -345,17 +345,21 @@ what Explore counts; the text holds everything but superseded / excluded rows.
 
 - `python weekly_email.py --preview [--today YYYY-MM-DD]` writes
   `logs/weekly_preview.html` (images inline) and sends nothing.
-- `python weekly_email.py --to <address>` sends now (a test).
-- The scheduled task **"Yield Portal - weekly email"** on Kolten's PC runs
-  `pythonw weekly_email.py --to <group> --scheduled`. The recipient lives on the
-  task's command line, not in this public repo. `--scheduled` logs to
-  `logs/weekly_email.log` and sends at most once per ISO week
-  (`logs/weekly_email.json`), so a catch-up run after the PC was off doesn't
-  repeat it.
-- Sent through classic Outlook over COM, because Graph mail is blocked and SMTP
-  is refused. `.Send()` only queues it: in cached Exchange mode Outlook sends on
-  its own send/receive cycle, so the script waits up to 35 minutes for the
-  Outbox to drain (Morning Wire's lesson) and exits 2 if it's still queued.
+- `python weekly_email.py --to <address> [--via graph]` sends now (a test).
+- **Runs on the Droplet** (`deploy/run_weekly_email.sh`, Tuesdays 7:00 CT,
+  through cron-alert; `deploy/DROPLET.md`): `--scheduled --via graph` sends
+  through Microsoft Graph as the basis tracker's shared mailbox (that app has
+  Mail.Send), shown as "JSA Yield Reports", with replies to
+  `WEEKLY_EMAIL_REPLY_TO`. The Graph settings come from the basis tracker's
+  `.env` through `GRAPH_ENV_FILE`, so there's one secret to rotate. The
+  recipient is `WEEKLY_EMAIL_TO`, never in this public repo.
+- `--scheduled` sends at most once per ISO week, checked against the
+  `WEEKLY_EMAILS` table, so a second scheduler left on (the PC's old
+  "Yield Portal - weekly email" task, now disabled) can't repeat it.
+- `--via outlook` (the PC) sends through classic Outlook over COM. `.Send()` only
+  queues it: in cached Exchange mode Outlook sends on its own send/receive
+  cycle, so the script waits up to 35 minutes for the Outbox to drain (Morning
+  Wire's lesson) and exits 2 if it's still queued.
 - `YIELD_PORTAL_URL` in `.env`, if set, adds a link to the portal in the footer.
 
 ## Charts

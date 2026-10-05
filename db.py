@@ -500,6 +500,52 @@ def last_sync_run():
         conn.close()
 
 
+# --- the weekly email ----------------------------------------------------------------
+# One row per scheduled send of weekly_email.py, so whichever machine sends it
+# (the Droplet, or the PC before it) sees that this week's is out, and a second
+# scheduler left switched on can't send it again.
+WEEKLY_TABLE = "WEEKLY_EMAILS"
+_WEEKLY_COLUMNS = [("week", "VARCHAR(10)"), ("sent_at", "TIMESTAMP"), ("host", "VARCHAR(60)"),
+                   ("recipient", "VARCHAR(300)"), ("via", "VARCHAR(10)")]
+
+
+@_retry_once
+def record_weekly_email(week, host, recipient, via):
+    """Log one weekly-email send (sent_at in UTC)."""
+    cols = ", ".join(c for c, _ in _WEEKLY_COLUMNS)
+    conn, ph = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"CREATE TABLE IF NOT EXISTS {WEEKLY_TABLE} ("
+                    + ", ".join(f"{c} {t}" for c, t in _WEEKLY_COLUMNS) + ")")
+        now = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None, microsecond=0)
+        cur.execute(f"INSERT INTO {WEEKLY_TABLE} ({cols}) "
+                    f"VALUES ({', '.join([ph] * len(_WEEKLY_COLUMNS))})",
+                    (week, now.isoformat(sep=" "), host, recipient, via))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@_retry_once
+def weekly_email_sent(week):
+    """The send recorded for an ISO week ("2026-W41") as a dict, or None."""
+    conn, ph = _connect()
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute(f"SELECT {', '.join(c for c, _ in _WEEKLY_COLUMNS)} FROM {WEEKLY_TABLE} "
+                        f"WHERE week = {ph} ORDER BY sent_at DESC LIMIT 1", (week,))
+        except Exception as exc:
+            if "does not exist" in str(exc).lower() or "no such table" in str(exc).lower():
+                return None
+            raise
+        row = cur.fetchone()
+        return dict(zip([c for c, _ in _WEEKLY_COLUMNS], row)) if row else None
+    finally:
+        conn.close()
+
+
 # --- review decisions ---------------------------------------------------------
 # What a person decided about a flagged report (checks.py raises the flags on
 # every load). Its own table, so YIELD_OBSERVATIONS never changes shape and the
