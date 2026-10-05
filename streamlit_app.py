@@ -90,6 +90,9 @@ if not VIEW_ONLY:                       # the internal pages never exist on the 
         # out of anything customer-facing until the permissions come back.
         st.Page("app_pages/trials.py", title="Variety trials",
                 icon=":material/science:"),
+        # ISA states its copyright and no other terms: internal, like the trials above.
+        st.Page("app_pages/strip_trials.py", title="Strip trials",
+                icon=":material/view_week:"),
         st.Page("app_pages/add.py", title="Add reports", icon=":material/add_circle:"),
         st.Page("app_pages/review.py", title="Review & edit", icon=":material/edit_note:"),
         st.Page("app_pages/import_pdf.py", title="Import PDF",

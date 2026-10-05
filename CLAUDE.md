@@ -227,6 +227,38 @@ fitted line tracks composition rather than the season (Nebraska dryland corn run
 counties to 2016 and western ones from 2020, and falls 140 bu without a bad year). Those
 programmes are off by default and the page says why.
 
+## Strip trials — ISA's on-farm trials (internal)
+
+**Strip trials** puts the Iowa Soybean Association's replicated on-farm strip trials
+(about 4,800 since 2005, every one in Iowa) beside NASS: each trial is one real field, so
+its yield is read against its county's NASS yield (the cache has counties from 2015) and
+Iowa's. One table, `ISA_STRIP_TRIALS`, owned by `isa_trials.py`, dropped and rebuilt on
+load like the trial tables.
+
+```
+python load_isa.py fetch                       # the trial list + each report's text -> data/isa/
+python load_isa.py load [--target snowflake]   # read the text, replace the table
+```
+
+`fetch` takes ISA's public database one year at a time (all years at once gives an HTTP
+500), then each trial's PDF report with a 2 s pause, keeping only its text
+(`data/isa/text/<trial id>.txt`) and skipping what's cached. The first run takes about 5 h,
+so it runs on the Droplet. `data/` is gitignored: the repo is public.
+
+The yields are only in the reports, which have changed layout several times
+(`isa_trials.LAYOUTS`, named by the first season seen). **ISA's listed response is the
+check**: a reading counts only when the gap between its treatments matches the response in
+ISA's trial list (to 0.1 bu, or 1 bu for whole-bushel figures). The list's treatment count
+can be wrong for the report ("A vs B vs C" over a report that compared two), so when a
+response is listed, 2-6 treatments are tried. Nothing agreeing → `unread`, never a guess.
+For example, a "soybean" trial whose report shows corn yields stays out. The field yield is
+the mean of the treatment averages. Statuses: `read`, `unverified` (no listed response; none
+so far), `unread`, `no report`. **`python tests/test_isa_trials.py` after any change**:
+made-up fragments, one per layout.
+
+**Internal**: ISA states its copyright and no other terms. The page is registered only
+when `not VIEW_ONLY`, and the report text never goes in the repo.
+
 ## Fields are the user's choice — don't widen them
 
 Kept: yield (`yield_bpa` + low/high + `ly_yield` + `expected_yield`), `aph`,

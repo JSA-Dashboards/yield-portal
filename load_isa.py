@@ -2,7 +2,8 @@
 Iowa Soybean Association replicated on-farm strip trials -> the portal.
 
     python load_isa.py fetch            # trial list + each report's text, into data/isa/
-    python load_isa.py load [--target snowflake]   # parse the cached text, replace ISA_STRIP_TRIALS
+    python load_isa.py load [--target snowflake]   # read the cached text (isa_trials.py),
+                                                   # replace ISA_STRIP_TRIALS (.env login)
 
 The trial list comes from ISA's public strip-trial database
 (onlinedb.iasoybeans.com), one year at a time (asking for every year at once
@@ -30,6 +31,11 @@ import urllib.request
 
 PROJ = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJ))
+try:
+    from dotenv import load_dotenv
+    load_dotenv(PROJ / ".env", override=True)
+except ModuleNotFoundError:
+    pass
 DATA = PROJ / "data" / "isa"
 TEXT = DATA / "text"
 LIST = DATA / "trials.csv"
@@ -109,8 +115,8 @@ def main():
     if args.step == "fetch":
         fetch(args.last_year)
     else:
-        import isa_trials
         os.environ["USE_SNOWFLAKE"] = "1" if args.target == "snowflake" else ""
+        import isa_trials
         isa_trials.load_from_cache(LIST, TEXT, args.target)
 
 
