@@ -4,10 +4,12 @@ Date the archive from the report emails, in bulk.
     python match_emails.py --target sqlite            # dry run: report only
     python match_emails.py --target sqlite --apply    # write it
     pythonw match_emails.py --target snowflake --auto # the scheduled task (no console)
+    python match_emails.py --target snowflake --source graph [--auto]   # no Outlook: the droplet
 
-Reads every Ag Trader Talk yield email Outlook has cached (Inbox, Deleted Items, Archive)
-over COM, parses each one exactly like the Add reports page, and for each report
-in it:
+Reads every Ag Trader Talk yield email, from Outlook's cache over COM (Inbox,
+Deleted Items, Archive) or, with --source graph, from the whole mailbox on the
+server through Microsoft Graph (graph_mail.py; needs the Mail.Read permission).
+It parses each one exactly like the Add reports page, and for each report in it:
   date    archive has it, undated or dated later -> stamp this email's date,
           subject and Message-ID on that row
   dated   archive has it with this date or earlier -> nothing to do
@@ -84,18 +86,35 @@ MESSAGE_ID = "http://schemas.microsoft.com/mapi/proptag/0x1035001F"
 FOLDERS = ["Inbox", "Deleted Items", "Archive"]
 
 
-def _mail(m, folder):
-    """An Outlook item -> the email as first sent (a colleague's forward unwrapped)."""
-    t = m.ReceivedTime                                  # wall-clock local time
-    e = {"folder": folder, "subject": m.Subject or "", "body": m.Body or "",
-         "received": dt.datetime(t.year, t.month, t.day, t.hour, t.minute),
-         "msgid": m.PropertyAccessor.GetProperty(MESSAGE_ID), "forwarded": False}
-    if "agtradertalk" not in (m.SenderEmailAddress or "").lower():
+def _original(e):
+    """An email from either source -> as first sent: a colleague's forward is
+    unwrapped (its own replies quote the source's headers too, so only mail
+    from someone else)."""
+    e = dict(e, forwarded=False)
+    if "agtradertalk" not in e["sender"]:
         fwd = P.unwrap_forward(e["body"])
         if fwd:
             e.update(subject=fwd[0], body=fwd[1], received=fwd[2].replace(second=0),
-                     folder=f"{folder} (forward)", forwarded=True)
+                     folder=f"{e['folder']} (forward)", forwarded=True)
     return e
+
+
+def _mail(m, folder):
+    """An Outlook item -> the email as first sent."""
+    t = m.ReceivedTime                                  # wall-clock local time
+    return _original({
+        "folder": folder, "subject": m.Subject or "", "body": m.Body or "",
+        "sender": (m.SenderEmailAddress or "").lower(),
+        "received": dt.datetime(t.year, t.month, t.day, t.hour, t.minute),
+        "msgid": m.PropertyAccessor.GetProperty(MESSAGE_ID)})
+
+
+def read_graph():
+    """The source's emails and colleagues' forwards of them, from every folder of
+    the mailbox on the server (graph_mail.py)."""
+    import graph_mail
+    emails = [_original(e) for e in graph_mail.read_emails()]
+    return [e for e in emails if "agtradertalk" in e["sender"] or e["forwarded"]]
 
 
 def _outlook_running():
@@ -178,7 +197,12 @@ def main():
                     help="unattended (the scheduled task): writes, logs to logs/email_sync.log "
                          "and records the run for the portal")
     ap.add_argument("--msg", nargs="*", default=[], help="also read these saved .msg files")
+    ap.add_argument("--source", choices=["outlook", "graph"], default="outlook",
+                    help="outlook: classic Outlook's cache over COM (Windows); graph: the "
+                         "mailbox on the server via Microsoft Graph (graph_mail.py)")
     args = ap.parse_args()
+    if args.source == "graph" and args.msg:
+        ap.error("--msg reads files through Outlook; it doesn't go with --source graph")
     if not args.auto:
         return run(args)
     args.apply = True
@@ -211,9 +235,12 @@ def run(args):
     archive = data.frame()
     applied = set(archive["email_id"].dropna())
     archive = archive[archive["status"] != "superseded"].reset_index(drop=True)
-    emails = read_emails(catch_up=args.auto)
-    seen_ids = {e["msgid"] for e in emails}
-    emails += [e for e in read_msg_files(args.msg) if e["msgid"] not in seen_ids]
+    if args.source == "graph":
+        emails = read_graph()
+    else:
+        emails = read_emails(catch_up=args.auto)
+        seen_ids = {e["msgid"] for e in emails}
+        emails += [e for e in read_msg_files(args.msg) if e["msgid"] not in seen_ids]
     emails.sort(key=lambda e: e["received"])
     print(f"{len(emails)} Ag Trader Talk emails "
           f"({dict(collections.Counter(e['folder'] for e in emails))})\n")
