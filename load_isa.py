@@ -53,11 +53,25 @@ def _get(url, tries=3):
         try:
             return urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=120).read()
         except Exception as exc:
-            # 404: a report the list links but ISA doesn't have (many 2006 "A"/"B" trials)
+            # 404 won't change on a retry (see _report for the usual cause)
             gone = isinstance(exc, urllib.error.HTTPError) and exc.code == 404
             if gone or i == tries - 1:
                 raise
             time.sleep(10 * (i + 1))
+
+
+def _report(r) -> bytes:
+    """A trial's PDF. The list links "ST2006128A_Final_Report.pdf" where ISA's server,
+    which is case-sensitive, has "ST2006128a_...", so a 404 is retried with the trial
+    id's suffix letter in the other case."""
+    try:
+        return _get(r["report_url"])
+    except urllib.error.HTTPError as exc:
+        tid = r["trial_id"]
+        if exc.code != 404 or not tid[-1:].isalpha() or tid not in r["report_url"]:
+            raise
+        time.sleep(PAUSE)
+        return _get(r["report_url"].replace(tid, tid[:-1] + tid[-1].swapcase()))
 
 
 def fetch_list(last_year: int) -> list:
@@ -96,7 +110,7 @@ def fetch(last_year: int):
     failed = []
     for i, r in enumerate(todo, 1):
         try:
-            doc = fitz.open(stream=_get(r["report_url"]), filetype="pdf")
+            doc = fitz.open(stream=_report(r), filetype="pdf")
             text = "\f".join(p.get_text() for p in doc)
             (TEXT / f"{r['trial_id']}.txt").write_text(text, encoding="utf-8")
         except Exception as exc:
