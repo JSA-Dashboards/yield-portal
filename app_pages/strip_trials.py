@@ -54,7 +54,8 @@ def strip_trials():
                       key="isa_q", label_visibility="collapsed")
     f = trials[(trials.crop == crop) & (trials.year >= lo) & (trials.year <= hi)]
     if q:
-        hay = (f.county + " " + f.district + " " + f.trial_type + " " + f.trial_detail)
+        # a blank district comes back NULL, and one None would make the mask NaN
+        hay = f[["county", "district", "trial_type", "trial_detail"]].fillna("").agg(" ".join, axis=1)
         f = f[hay.str.contains(q, case=False, regex=False)]
     read = f[f.status.isin(isa_trials.READ)]
     if read.empty:
