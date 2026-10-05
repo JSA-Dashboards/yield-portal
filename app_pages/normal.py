@@ -8,6 +8,7 @@ import data
 import geo
 import nass
 import places
+import plots
 import report_text as RT
 
 st.title("Reports vs normal")
@@ -18,7 +19,9 @@ st.caption("How the reports compare with NASS yields for the same places: the 5-
 
 
 df = data.load_all()
-reports = df[df["in_analysis"]]
+in_scope = df[df["in_analysis"]]
+# seed plots get the same comparison but are their own table, out of every headline number
+reports = in_scope[in_scope["source"].isin(data.HEADLINE_SOURCES)]
 if reports.empty:
     st.info("No reports to compare yet.")
     st.stop()
@@ -38,11 +41,13 @@ with st.sidebar:
                        disabled=crop != "Corn")
 
 state_tbl = nass.state_table(state_raw)
-matched = places.match_all(reports, nass.county_index(county_raw), places.cached_decisions())
-rep = analysis.attach(matched, nass.county_table(county_raw), state_tbl, geo.load())
-rep = rep[rep["crop"] == crop]
+matched = places.match_all(in_scope, nass.county_index(county_raw), places.cached_decisions())
+rep_all = analysis.attach(matched, nass.county_table(county_raw), state_tbl, geo.load())
+rep_all = rep_all[rep_all["crop"] == crop]
 if crop == "Corn" and not silage:
-    rep = rep[~rep["is_silage"]]
+    rep_all = rep_all[~rep_all["is_silage"]]
+plots_rep = rep_all[rep_all["source"] == "Seed plot"]
+rep = rep_all[rep_all["source"].isin(data.HEADLINE_SOURCES)]
 cur = rep[rep["crop_year"] == season]
 if cur.empty:
     st.info(f"No {crop.lower()} reports for {season} yet.")
@@ -199,6 +204,55 @@ with st.expander(f"The {len(srows)} {RT.state_name(pick)} reports behind these n
         "r_usda": st.column_config.NumberColumn("ratio  ", format="%.2f×"),
         "raw_text": st.column_config.TextColumn("Report", width="large"),
     })
+
+# --- seed plots: against their own history, their own table ------------------------------
+if len(plots_rep):
+    pc = plots.compare(plots_rep)
+    pseason = plots.by_season(pc).set_index("crop_year")
+    with st.container(border=True):
+        st.markdown(f"**Seed plots** · {crop.lower()}, each against its own history")
+        st.caption(f"A plot sits at the same place every year, so each season is set against the "
+                   f"straight-line trend of that plot's own earlier seasons "
+                   f"({plots.MIN_HISTORY}+ needed) and against the same plot last season. A plot "
+                   f"with less history shows its NASS comparison instead. Kept out of every number "
+                   f"above: plots run well above county averages and companies choose what they "
+                   f"publish.")
+        if season in pseason.index:
+            ps_now = pseason.loc[season]
+            earlier = pseason[(pseason.index < season) & (pseason["with_trend"] >= 3)]
+            with st.container(horizontal=True):
+                st.metric(f"Plots vs their own trend · {season}",
+                          "—" if pd.isna(ps_now["vs_trend_pct"]) else f"{ps_now['vs_trend_pct']:+.1f}%",
+                          border=True,
+                          help=f"Median over {int(ps_now['with_trend'])} plots with enough history "
+                               f"· {ps_now['tier']}. Earlier seasons: "
+                               + (", ".join(f"{int(y)} {v:+.1f}%" for y, v in
+                                            earlier["vs_trend_pct"].dropna().items()) or "none yet"))
+                st.metric("Same plot vs last season",
+                          "—" if pd.isna(ps_now["vs_ly_pct"]) else f"{ps_now['vs_ly_pct']:+.1f}%",
+                          border=True, help="Median change on plots with last season on record.")
+        show = pc.sort_values(["crop_year", "state", "location"], ascending=[False, True, True],
+                              na_position="last")
+        show = show.assign(r_avg5=show["r_avg5"].where(show["basis"] != "own history"))
+        st.dataframe(
+            show[["crop_year", "source_file", "state", "location", "yield_bpa", "own_trend",
+                  "vs_trend_pct", "plot_ly", "vs_ly_pct", "history", "basis", "r_avg5"]],
+            hide_index=True, column_config={
+                "crop_year": st.column_config.NumberColumn("Season", format="%d"),
+                "source_file": "Company", "state": "State", "location": "Place",
+                "yield_bpa": st.column_config.NumberColumn("Plot average", format="%.1f"),
+                "own_trend": st.column_config.NumberColumn(
+                    "Own trend", format="%.1f",
+                    help="What the plot's earlier seasons' straight line expects this season."),
+                "vs_trend_pct": st.column_config.NumberColumn("vs own trend", format="%+.1f%%"),
+                "plot_ly": st.column_config.NumberColumn("Same plot LY", format="%.1f"),
+                "vs_ly_pct": st.column_config.NumberColumn("vs LY", format="%+.1f%%"),
+                "history": st.column_config.NumberColumn("Earlier seasons"),
+                "basis": "Read against",
+                "r_avg5": st.column_config.NumberColumn(
+                    "vs NASS 5-season", format="%.2f×",
+                    help="Only for plots with too little history to read against themselves."),
+            })
 
 pending = int((matched["county_method"] == "suggested").sum())
 src = cur["avg5_level"].value_counts()

@@ -28,9 +28,17 @@ NUMERIC = ["yield_bpa", "yield_min", "yield_max", "ly_yield", "expected_yield", 
 # pasted or keyed in on Add reports. JSA sends some of its reports to Ag Trader
 # Talk too, so one can come back by email: the matcher dates the stored row
 # instead of adding it again, and the duplicate check catches a repeat it misses.
+# plot: a seed company's plot result a customer shared (the company in
+# source_file). Plots run well above county averages and companies choose what
+# they publish, so they're their own source, kept out of the headline numbers
+# (HEADLINE_SOURCES) unless someone adds them in. Their websites can't be
+# collected from (their terms forbid it): only results shared with JSA come in.
 SOURCE_LABEL = {"pdf": "Ag Trader Talk", "email": "Ag Trader Talk",
-                "manual": "Ag Trader Talk", "jsa": "JSA"}
-SOURCES = ["Ag Trader Talk", "JSA"]
+                "manual": "Ag Trader Talk", "jsa": "JSA", "plot": "Seed plot"}
+SOURCES = ["Ag Trader Talk", "JSA", "Seed plot"]
+HEADLINE_SOURCES = ["Ag Trader Talk", "JSA"]
+PLOT_COMPANIES = ["Pioneer", "DEKALB / Asgrow", "Beck's", "AgriGold", "Golden Harvest", "NK",
+                  "Stine", "LG Seeds", "Wyffels", "Channel", "Other"]
 
 
 @st.cache_data(ttl=600, show_spinner="Loading reports…")

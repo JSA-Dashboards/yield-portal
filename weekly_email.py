@@ -100,8 +100,10 @@ def load():
 
 
 def counted(df, crop):
-    """What Explore counts for a crop: clean + approved, corn without silage."""
-    f = df[(df["crop"] == crop) & df["status"].isin(["clean", "approved"])]
+    """What Explore counts for a crop by default: clean + approved field reports
+    (seed plots left out), corn without silage."""
+    f = df[(df["crop"] == crop) & df["status"].isin(["clean", "approved"])
+           & df["source"].isin(data.HEADLINE_SOURCES)]
     return f[~f["is_silage"]] if crop == "Corn" else f
 
 
@@ -207,6 +209,7 @@ def new_box(new, lo, hi):
             continue
         items = " · ".join(
             e(_place(r)) + (f" {r.yield_bpa:g}" if pd.notna(r.yield_bpa) else "")
+            + (f" ({e(t)})" if (t := RT.source_tag(r.source, r.source_file)) else "")
             for r in rows.itertuples())
         lines.append(f"<b>{crop} ({len(rows)}):</b> {items}")
     other = new[~new["crop"].isin(data.CROPS)]
@@ -236,8 +239,9 @@ def text_html(df, lo, hi):
             for r in rows.itertuples():
                 label, body = RT.label_and_body(r.raw_text, r.location, r.state)
                 bg = f"background-color:{NEW_BG};" if _in(r.date_reported, lo, hi) else ""
-                tag = (f' <span style="color:{BLUE};font-size:11px;font-weight:600">JSA</span>'
-                       if r.source == "JSA" else "")
+                t = RT.source_tag(r.source, r.source_file)
+                tag = (f' <span style="color:{BLUE if r.source == "JSA" else "#b45309"};'
+                       f'font-size:11px;font-weight:600">{e(t)}</span>' if t else "")
                 trs.append(
                     f'<tr><td valign="top" style="width:52px;padding:3px 6px;font-size:12px;'
                     f'color:{GRAY};white-space:nowrap">{RT.day_label(r.date_reported)}</td>'
@@ -268,7 +272,7 @@ def build(today: dt.date):
         if f[f["crop_year"] == year].empty:
             continue
         h = data.headline(f, year, prev)
-        n_new = int((new["crop"] == crop).sum())
+        n_new = int(((new["crop"] == crop) & new["source"].isin(data.HEADLINE_SOURCES)).sum())
         box_cid, state_cid = f"{crop.lower()}_box", f"{crop.lower()}_states"
         images[box_cid] = _png(box_chart(f, crop))
         images[state_cid] = _png(state_chart(f, crop, year, prev, years_all))
@@ -301,7 +305,8 @@ def build(today: dt.date):
         f'<div style="font-size:12px;color:#cfd4da;margin-top:2px">{stamp}</div></td></tr>'
         '<tr><td style="padding:14px 18px 6px 18px">'
         f'<p style="margin:0 0 12px 0;font-size:13px;color:{GRAY}">County field reports from '
-        "Ag Trader Talk and JSA (JSA's own are tagged JSA).</p>"
+        "Ag Trader Talk and JSA (JSA's own are tagged JSA). Seed plots customers shared appear "
+        "in the report text, tagged with the company, and stay out of the tiles and charts.</p>"
         + new_box(new, lo, hi) + "".join(parts)
         + f'<h2 style="font-family:{FONT};font-size:17px;color:{BLUE};margin:26px 0 0 0">'
         f"Report text · {year}</h2>"

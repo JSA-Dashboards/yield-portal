@@ -92,6 +92,12 @@ check("JSA's own reports are tagged; Ag Trader Talk's aren't",
       (RT.md_report("Polk Co, IA: 210 bpa", "Polk Co", "IA", source="JSA"),
        RT.md_report("Polk Co, IA: 210 bpa", "Polk Co", "IA", source="Ag Trader Talk")),
       ("**Polk Co, IA:** 210 bpa :blue-badge[JSA]", "**Polk Co, IA:** 210 bpa"))
+check("a seed plot is tagged with its company",
+      RT.md_report("Polk Co, IA: plot average 232 bpa", "Polk Co", "IA", source="Seed plot",
+                   company="Beck's"),
+      "**Polk Co, IA:** plot average 232 bpa :orange-badge[Beck's plot]")
+check("tags", [RT.source_tag("Seed plot"), RT.source_tag("Ag Trader Talk", "x.pdf"),
+               RT.source_tag("Seed plot", "Pioneer")], ["Seed plot", "", "Pioneer plot"])
 
 # --- downloads -----------------------------------------------------------------------
 pdf = RT.to_pdf(RT.ordered(df), "Yield reports · 2026", "made-up rows")

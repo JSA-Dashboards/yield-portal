@@ -1,5 +1,5 @@
 """Add reports — paste a report email (stamped with its date), or key one in, from
-Ag Trader Talk or JSA's own."""
+Ag Trader Talk, JSA's own, or a seed-company plot a customer shared."""
 import datetime as dt
 
 import pandas as pd
@@ -24,11 +24,21 @@ with st.container(horizontal=True):
                                 default="Paste an email", key="add_mode") or "Paste an email"
     source = st.segmented_control(
         "Source", data.SOURCES, default=data.SOURCES[0], key="add_source",
-        help="Ag Trader Talk's report emails, or JSA's own reports. JSA sends some of its "
-             "reports to Ag Trader Talk too: when one comes back by email it's matched to "
-             "the stored report, and a repeat the matcher misses is flagged as a duplicate "
-             "on Review & edit.") or data.SOURCES[0]
+        help="Ag Trader Talk's report emails, JSA's own reports, or a seed company's plot "
+             "result a customer shared. JSA sends some of its reports to Ag Trader Talk too: "
+             "when one comes back by email it's matched to the stored report, and a repeat "
+             "the matcher misses is flagged as a duplicate on Review & edit.") or data.SOURCES[0]
 jsa = source == "JSA"
+plot = source == "Seed plot"
+company = None
+if plot:
+    st.caption("A seed company's plot result a customer shared with us (their websites can't "
+               "be collected from). Enter the plot's **average across entries** as the yield, "
+               "not the best hybrid. Plots are their own source, kept out of the headline "
+               "numbers.")
+    company = st.selectbox("Company", data.PLOT_COMPANIES, index=None, key="add_company",
+                           placeholder="Whose plot", accept_new_options=True)
+REPORT_SOURCE = "jsa" if jsa else ("plot" if plot else None)   # None: Ag Trader Talk's
 
 
 def _val(v):
@@ -118,6 +128,9 @@ if mode == "Paste an email":
         if save and missing:
             st.error(f"Pick a crop for row {', '.join(map(str, missing))} before saving.")
             save = False
+        if save and plot and not company:
+            st.error("Pick the plot's company above before saving.")
+            save = False
         if save:
             new_rows, dated, kept_earlier, skipped = [], 0, 0, 0
             for i, e in edited.iterrows():
@@ -133,9 +146,10 @@ if mode == "Paste an email":
                     else:
                         db.set_reported(h, meta["date"], meta["subject"])
                         dated += 1
-                    if jsa and len(stored) and stored["source"].iloc[0] != "JSA":
-                        # one report, kept once; the note says JSA had it too
-                        note = f"JSA reported this too ({meta['date']:%b %d, %Y})."
+                    if REPORT_SOURCE and len(stored) and stored["source"].iloc[0] != source:
+                        # one report, kept once; the note says JSA (or the plot) had it too
+                        who = f"{company} plot" if plot else source
+                        note = f"{who} reported this too ({meta['date']:%b %d, %Y})."
                         prior = stored["notes"].iloc[0]
                         db.update_row(h, {"notes": f"{prior} {note}" if isinstance(prior, str)
                                           and prior.strip() else note})
@@ -146,8 +160,10 @@ if mode == "Paste an email":
                 r["is_silage"] = bool(r["is_silage"])
                 r["dedup_hash"] = P.dedup_hash(r["crop_year"], r["crop"], r["state"],
                                                r["location"], r["raw_text"] or "")
-                r.update(report_source="jsa" if jsa else "email", date_reported=meta["date"],
+                r.update(report_source=REPORT_SOURCE or "email", date_reported=meta["date"],
                          email_subject=meta["subject"])
+                if plot:
+                    r["source_file"] = company
                 new_rows.append(r)
             inserted, dupes = db.insert_new(new_rows)
             data.invalidate()
@@ -162,9 +178,67 @@ if mode == "Paste an email":
             st.session_state["add_flash"] = "Saved — " + ", ".join(parts) + "."
             st.rerun()
 
+elif plot:
+    # a plot is read against its own history, so it comes in as a series: one row a season
+    st.caption("Enter the plot's history, one row per season, as the customer shared it: the "
+               "same company and place every year. Each season is then read against the plot's "
+               "own earlier seasons (5+ needed for a trend) and the same plot last season.")
+    with st.form("plot_form"):
+        c1, c2, c3 = st.columns([1, 1, 2])
+        crop = c1.selectbox("Crop", data.CROPS)
+        state = c2.selectbox("State", STATES, index=None, placeholder="Choose")
+        location = c3.text_input("Plot location", placeholder="Logan Co, or the nearest town")
+        seasons = st.data_editor(
+            pd.DataFrame({"season": pd.Series([today.year], dtype="Int64"),
+                          "plot_average": pd.Series([None], dtype="Float64"),
+                          "entries": pd.Series([None], dtype="Int64"),
+                          "notes": pd.Series([""], dtype="string")}),
+            num_rows="dynamic", hide_index=True, key="plot_seasons",
+            column_config={
+                "season": st.column_config.NumberColumn("Season", min_value=1980,
+                                                        max_value=today.year, format="%d",
+                                                        required=True),
+                "plot_average": st.column_config.NumberColumn(
+                    "Plot average (bpa)", min_value=0.0, max_value=400.0, format="%.1f",
+                    help="The average across the plot's entries, not the best hybrid."),
+                "entries": st.column_config.NumberColumn("Entries", min_value=1, format="%d",
+                                                         help="Hybrids or varieties in the plot."),
+                "notes": st.column_config.TextColumn("Notes", width="large"),
+            })
+        ok = st.form_submit_button("Save plot history", type="primary", icon=":material/save:")
+    if ok:
+        good = seasons.dropna(subset=["season", "plot_average"])
+        if not company or not state or not location.strip():
+            st.error("Pick the company above, and give the plot's state and location.")
+        elif good.empty:
+            st.error("Add at least one season with its plot average.")
+        else:
+            rows = []
+            for e in good.itertuples(index=False):
+                yr, avg = int(e.season), float(e.plot_average)
+                note = str(e.notes).strip() if isinstance(e.notes, str) else ""
+                raw = (f"{company} plot, {location.strip()}, {state}: plot average {avg:g} bpa"
+                       + (f" ({int(e.entries)} entries)" if pd.notna(e.entries) else "")
+                       + (f". {note}" if note else ""))
+                row = {"crop_year": yr, "crop": crop, "state": state,
+                       "location": location.strip(), "yield_bpa": avg, "yield_min": avg,
+                       "yield_max": avg, "raw_text": raw, "report_source": "plot",
+                       "source_file": company, "is_silage": False, "is_record": False,
+                       # history has no report date; this season's is dated today
+                       "date_reported": today if yr == today.year else None}
+                row["dedup_hash"] = P.dedup_hash(yr, crop, state, row["location"], raw)
+                rows.append(row)
+            inserted, dupes = db.insert_new(rows)
+            data.invalidate()
+            st.session_state["add_flash"] = (
+                f"Saved {inserted} season(s) of the {company} plot at {location.strip()}"
+                + (f"; {dupes} were already stored" if dupes else "") + ".")
+            st.rerun()
+
 else:
     st.caption("Key in a report that didn't arrive by email or PDF: JSA's own, or one of "
-               "Ag Trader Talk's (set the source above).")
+               "Ag Trader Talk's (set the source above). A seed plot comes in as its whole "
+               "history: pick Seed plot above.")
     with st.form("manual_form"):
         c1, c2, c3 = st.columns(3)
         year = c1.number_input("Crop year", min_value=2015, max_value=2100,
@@ -198,7 +272,7 @@ else:
                    "aph": aph, "maturity": maturity.strip() or None,
                    "irrigation": irrigation, "disease": ", ".join(disease) or None,
                    "is_silage": is_silage, "is_record": is_record, "raw_text": raw,
-                   "report_source": "jsa" if jsa else "manual"}
+                   "report_source": REPORT_SOURCE or "manual"}
             row["dedup_hash"] = P.dedup_hash(row["crop_year"], crop, state,
                                              row["location"], raw)
             _, twin, _ = data.find_match(data.load_all(), row)
