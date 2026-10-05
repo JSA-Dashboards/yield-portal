@@ -86,7 +86,7 @@ check("agrees: no response, nothing to check", I.agrees([60.0, 61.0], None), Tru
 check("treatments: 'A vs. B vs C'", I.n_treatments("A vs. B vs C"), 3)
 check("treatments: nothing to split is still a comparison of two", I.n_treatments(""), 2)
 
-# NASS beside each trial: O'Brien is NASS's "O BRIEN"; the cache has counties from 2015
+# NASS beside each trial: O'Brien is NASS's "O BRIEN"; a county NASS skipped has only Iowa
 county_raw = pd.DataFrame(
     [("Corn", 2020, "IA", "O BRIEN", "19141", 200.0), ("Corn", 2020, "IA", "STORY", "19169", 210.0),
      ("Corn", 2020, "IL", "STORY", "17999", 150.0)],
@@ -103,7 +103,7 @@ w = I.with_nass(tr, county_raw, state_tbl).set_index("trial_id")
 check("O'Brien finds NASS's O BRIEN", w.loc["T1", "county_final"], 200.0)
 check("an Iowa county isn't matched to another state's", w.loc["T2", "county_final"], 210.0)
 check("field over county", round(w.loc["T1", "vs_county"], 6), 0.1)
-check("before the cached counties: state only", (pd.isna(w.loc["T3", "county_final"]),
+check("no county row that season: Iowa only", (pd.isna(w.loc["T3", "county_final"]),
                                                  round(w.loc["T3", "vs_state"], 6)), (True, 0.1))
 s = I.by_season(w.reset_index()).set_index("year")
 check("by season: read trials only, mean field, mean county, median ratio",
