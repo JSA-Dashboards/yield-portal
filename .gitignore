@@ -14,3 +14,6 @@ CLAUDE.local.md
 # the scheduled email sync writes here (may quote report text)
 logs/
 tests/*_local.json
+
+# the Droplet's virtualenv
+.venv/
