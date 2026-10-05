@@ -17,3 +17,6 @@ tests/*_local.json
 
 # the Droplet's virtualenv
 .venv/
+
+# downloaded source data (ISA strip-trial report text): not for the public repo
+data/
