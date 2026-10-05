@@ -5,6 +5,7 @@ import streamlit as st
 
 import analysis
 import data
+import geo
 import nass
 import places
 import report_text as RT
@@ -38,7 +39,7 @@ with st.sidebar:
 
 state_tbl = nass.state_table(state_raw)
 matched = places.match_all(reports, nass.county_index(county_raw), places.cached_decisions())
-rep = analysis.attach(matched, nass.county_table(county_raw), state_tbl)
+rep = analysis.attach(matched, nass.county_table(county_raw), state_tbl, geo.load())
 rep = rep[rep["crop"] == crop]
 if crop == "Corn" and not silage:
     rep = rep[~rep["is_silage"]]
@@ -75,12 +76,14 @@ def _delta(col):
 with st.container(horizontal=True):
     st.metric("vs 5-season average", _x(now["r_avg5"]), delta=_delta("r_avg5"), delta_color="off",
               border=True, help=f"Median of each report's yield ÷ its county's NASS average for "
-                                f"the 5 seasons before (the state's where the county isn't known). "
+                                f"the 5 seasons before. Where NASS skipped the county, the counties "
+                                f"around it stand in; the state's where the place isn't a county. "
                                 f"{now['n_r_avg5']} reports · {analysis.tier(now['n_r_avg5'])}. "
                                 f"Earlier seasons: {_band('r_avg5')}.")
     st.metric("vs last season", _x(now["r_ly"]), delta=_delta("r_ly"), delta_color="off",
-              border=True, help=f"Yield ÷ last season's NASS final for the same county (or state). "
-                                f"{now['n_r_ly']} reports · {analysis.tier(now['n_r_ly'])}. "
+              border=True, help=f"Yield ÷ last season's NASS final for the same county: its own "
+                                f"trend for a one-year gap, else the counties around it, else the "
+                                f"state. {now['n_r_ly']} reports · {analysis.tier(now['n_r_ly'])}. "
                                 f"Earlier seasons: {_band('r_ly')}.")
     st.metric(f"vs USDA ({usda_label})", _x(now["r_usda"]), delta=_delta("r_usda"),
               delta_color="off", border=True,
@@ -155,11 +158,11 @@ with st.container(border=True):
     srows = cur[cur["state"] == pick]
     state_median = this.loc[pick, "r_avg5"] if pick in this.index else None
     ct = analysis.counties(srows, state_median)
-    st.caption(f"Each county's median ratio to its own 5-season NASS average. A single report "
-               f"says more about that field than the county, so the **pulled** column moves "
-               f"thin counties toward {RT.state_name(pick)}'s median "
-               f"({_x(state_median)}). Reports naming a town or region use the state's "
-               f"numbers and aren't listed here.")
+    st.caption(f"Each county's median ratio to its own 5-season NASS average (from the counties "
+               f"around it where NASS skipped the county). A single report says more about that "
+               f"field than the county, so the **pulled** column moves thin counties toward "
+               f"{RT.state_name(pick)}'s median ({_x(state_median)}). Reports naming a town or "
+               f"region use the state's numbers and aren't listed here.")
     st.dataframe(
         ct.sort_values(["n", "county"], ascending=[False, True]), hide_index=True,
         column_config={
@@ -170,6 +173,10 @@ with st.container(border=True):
             "tier": "Confidence",
             "avg5": st.column_config.NumberColumn("County 5-season avg", format="%.1f"),
             "ly": st.column_config.NumberColumn("County last season", format="%.1f"),
+            "baseline": st.column_config.TextColumn(
+                "Baseline from", help="county: its own NASS figures. neighbors: NASS skipped "
+                                      "the county, so the counties around it, weighted by "
+                                      "closeness."),
         })
 
 # --- the reports underneath ----------------------------------------------------------------
@@ -177,7 +184,7 @@ with st.expander(f"The {len(srows)} {RT.state_name(pick)} reports behind these n
     ev = srows.assign(
         county=srows["county_names"].map(lambda ns: " / ".join(places.pretty(n) for n in ns)),
     )[["date_reported", "location", "county", "yield_bpa", "base_avg5", "avg5_level", "r_avg5",
-       "base_ly", "r_ly", "base_usda", "r_usda", "raw_text"]]
+       "base_ly", "ly_level", "r_ly", "base_usda", "r_usda", "raw_text"]]
     st.dataframe(ev, hide_index=True, column_config={
         "date_reported": st.column_config.DateColumn("Reported", format="MMM D"),
         "location": "Place", "county": "NASS county",
@@ -186,6 +193,7 @@ with st.expander(f"The {len(srows)} {RT.state_name(pick)} reports behind these n
         "avg5_level": "from",
         "r_avg5": st.column_config.NumberColumn("ratio", format="%.2f×"),
         "base_ly": st.column_config.NumberColumn("Last season", format="%.1f"),
+        "ly_level": "from ",
         "r_ly": st.column_config.NumberColumn("ratio ", format="%.2f×"),
         "base_usda": st.column_config.NumberColumn("USDA", format="%.1f"),
         "r_usda": st.column_config.NumberColumn("ratio  ", format="%.2f×"),
@@ -193,7 +201,14 @@ with st.expander(f"The {len(srows)} {RT.state_name(pick)} reports behind these n
     })
 
 pending = int((matched["county_method"] == "suggested").sum())
-st.caption(f"NASS data as of {pd.Timestamp(as_of).strftime('%b %d, %Y') if as_of else '—'}, "
+src = cur["avg5_level"].value_counts()
+src_note = " · ".join(f"{int(src[k])} {label}" for k, label in
+                      (("county", "county"), ("neighbors", "nearby counties"),
+                       ("own trend", "county trend"), ("state", "state (town or region)"),
+                       ("state fallback", "state fallback, left out of the medians"))
+                      if src.get(k))
+st.caption(f"{season} baselines (5-season average): {src_note}. "
+           f"NASS data as of {pd.Timestamp(as_of).strftime('%b %d, %Y') if as_of else '—'}, "
            f"from the shared NASS cache."
            + (f" {pending} reports name a place that may be a county; confirm them on "
               f"**Review & edit → Places** and they'll use the county's numbers." if pending else ""))
