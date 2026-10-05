@@ -61,24 +61,26 @@ def strip_trials():
     if read.empty:
         st.info("No trials with read yields match these filters.")
         return
+    one = isa_trials.fields(read)             # each field once
 
     with st.container(horizontal=True):
-        st.metric("Trials read", f"{len(read):,} of {len(f):,}", border=True,
-                  help="Trials whose yields were read from ISA's report and agree with the "
-                       "response ISA lists for the trial. The rest are in the table below, "
-                       "uncharted.")
-        st.metric("Counties", f"{read.county.nunique()}", border=True,
-                  help="Iowa counties with a read trial in the filter.")
-        paired = read.vs_county.dropna()
+        st.metric("Fields read", f"{len(one):,}", border=True,
+                  help=f"{len(read):,} of the {len(f):,} trials in the filter were read. ISA "
+                       f"lists some fields under more than one comparison, all from one "
+                       f"report, so each field counts once. The trials not read are in the "
+                       f"table below, uncharted.")
+        st.metric("Counties", f"{one.county.nunique()}", border=True,
+                  help="Iowa counties with a read field in the filter.")
+        paired = one.vs_county.dropna()
         st.metric("Field over its county", f"{paired.median():+.1%}" if len(paired) else "—",
                   border=True,
-                  help="Each trial's yield over its county's NASS yield that season, the "
-                       "median across trials (%d paired). A county NASS didn't publish that "
+                  help="Each field's yield over its county's NASS yield that season, the "
+                       "median across fields (%d paired). A county NASS didn't publish that "
                        "season has no figure." % len(paired))
-        st.metric("Field over Iowa", f"{read.vs_state.median():+.1%}"
-                  if read.vs_state.notna().any() else "—", border=True,
-                  help="Each trial's yield over Iowa's NASS yield that season, the median "
-                       "across trials.")
+        st.metric("Field over Iowa", f"{one.vs_state.median():+.1%}"
+                  if one.vs_state.notna().any() else "—", border=True,
+                  help="Each field's yield over Iowa's NASS yield that season, the median "
+                       "across fields.")
 
     season = isa_trials.by_season(read)
     with st.container(border=True):
@@ -88,11 +90,11 @@ def strip_trials():
                                         key="isa_view", label_visibility="collapsed") or "Chart"
         if view == "Chart":
             long = pd.concat([
-                season[["year", "field", "trials"]].rename(columns={"field": "value"})
+                season[["year", "field", "fields"]].rename(columns={"field": "value"})
                 .assign(series=SERIES[0]),
-                season[["year", "county", "trials"]].rename(columns={"county": "value"})
+                season[["year", "county", "fields"]].rename(columns={"county": "value"})
                 .assign(series=SERIES[1]),
-                season[["year", "state", "trials"]].rename(columns={"state": "value"})
+                season[["year", "state", "fields"]].rename(columns={"state": "value"})
                 .assign(series=SERIES[2]),
             ]).dropna(subset=["value"])
             long["year"] = long.year.astype(int)
@@ -116,9 +118,9 @@ def strip_trials():
                 tooltip=[alt.Tooltip("series:N", title=None),
                          alt.Tooltip("year:Q", title="Season", format="d"),
                          alt.Tooltip("value:Q", title="Yield", format=".1f"),
-                         alt.Tooltip("trials:Q", title="Trials read")])
+                         alt.Tooltip("fields:Q", title="Fields read")])
             st.altair_chart(alt.layer(solid, dashed, marks, tips).properties(height=360))
-            st.caption("Mean yield of the season's read trials, and the mean NASS yield of "
+            st.caption("Mean yield of the season's read fields, and the mean NASS yield of "
                        "the counties they sat in (where NASS published the county). The "
                        "trials move from county to county every year, so read the gap "
                        "between the two lines, not the level of either.")
@@ -130,26 +132,27 @@ def strip_trials():
                 hide_index=True,
                 column_config={
                     "year": st.column_config.NumberColumn("Season", format="%d"),
-                    "trials": st.column_config.NumberColumn("Trials read", format="%d"),
-                    "field": st.column_config.NumberColumn("Fields", format="%.1f",
-                                                           help="Mean of the trials' yields."),
+                    "fields": st.column_config.NumberColumn("Fields read", format="%d"),
+                    "field": st.column_config.NumberColumn("Mean field", format="%.1f",
+                                                           help="Mean of the fields' yields."),
                     "county": st.column_config.NumberColumn(
                         "Their counties", format="%.1f",
-                        help="Mean NASS yield of the trials' counties."),
+                        help="Mean NASS yield of the fields' counties."),
                     "state": st.column_config.NumberColumn("Iowa", format="%.1f"),
                     "over_county": st.column_config.NumberColumn(
                         "Over county", format="%+.1f%%",
-                        help="Median of each trial's yield over its county's."),
+                        help="Median of each field's yield over its county's."),
                     "over_state": st.column_config.NumberColumn(
                         "Over Iowa", format="%+.1f%%",
-                        help="Median of each trial's yield over Iowa's."),
+                        help="Median of each field's yield over Iowa's."),
                 })
         if not HAVE_NASS:
             st.caption("NASS yields come from the shared cache on Snowflake; this database "
                        "has none, so only the trials show.")
 
     cols = ["year", "county", "district", "trial_type", "trial_detail", "yields",
-            "trial_yield", "county_final", "vs_county", "avg_response", "status", "report_url"]
+            "trial_yield", "county_final", "vs_county", "avg_response", "status", "listed_crop",
+            "report_url"]
     table = f[cols].sort_values(["year", "county"], ascending=[False, True])
     table["vs_county"] *= 100
     with st.container(border=True):
@@ -174,9 +177,16 @@ def strip_trials():
                     help="The yield response ISA lists for the trial, which each reading "
                          "is checked against."),
                 "status": st.column_config.TextColumn(
-                    "Read", help="read: yields agree with ISA's response. unread: no "
-                                 "reading of the report agreed. no report: the report "
-                                 "couldn't be fetched."),
+                    "Read", help="read: some pair of yields agrees with ISA's response. "
+                                 "unverified: three or more treatments, exactly as many as "
+                                 "ISA lists, though none agrees (ISA's response isn't one "
+                                 "defined pair there). unread: no reading fits. same field: "
+                                 "listed again under another comparison, with no report of "
+                                 "its own. no report: not on ISA's server."),
+                "listed_crop": st.column_config.TextColumn(
+                    "Listed as", help="ISA's list files this trial under the other crop; the "
+                                      "report's rotation line and its yields both say this "
+                                      "one."),
                 "report_url": st.column_config.LinkColumn("Report", display_text="PDF"),
             })
         st.download_button("Download CSV", table.to_csv(index=False),
@@ -191,13 +201,24 @@ county and the yield response ISA measured. Each trial's yields are only in its 
 report. The loader keeps the text of those reports and reads each one's summary of
 treatment averages. The report layout has changed several times since 2005.
 
-**Checked against ISA.** A reading counts only when the gap between its treatments
-matches the response ISA lists for the trial. A report no reading agrees with stays
-*unread* rather than being guessed at. One example: a "soybean" trial whose report
-shows corn-level yields.
+**Checked against ISA.** A reading counts when the gap between two of its treatments
+matches the response ISA lists for the trial. For three or more treatments, ISA's
+response is sometimes the top less the bottom, sometimes another pair, and once the
+LSD. So a summary with exactly as many treatments as ISA lists is also taken, marked
+*unverified*. A report no reading fits stays *unread* rather than being guessed at.
+One example: a "soybean" trial whose report shows corn-level yields.
 
-**Field yield.** This is the mean of the treatment averages. Treatments mostly move
-yield a few bushels, and what's compared with NASS is the field's level.
+**Field yield, one per field.** A field's yield is the mean of its treatment averages.
+Treatments mostly move yield a few bushels, and what's compared with NASS is the
+field's level. Nitrogen-rate trials are the exception: their lowest rates pull the mean
+down. ISA lists some fields under two or more comparisons ("…268A" and "…268A1",
+"…0035" and "…0035a"), all from one report, so the chart and figures count each field
+once.
+
+**Crop.** ISA's list files a few trials under the wrong crop, such as 2017-18 cover-crop
+trials listed as corn that yielded about 60 bu. Where a report's rotation line names the
+other crop, the yields decide: under 100 bu is soybeans. The "Listed as" column shows
+ISA's original.
 
 **Not a random sample.** Cooperators volunteer, often on their better-managed ground.
 The trials also move between counties from year to year, and their number has fallen
