@@ -140,6 +140,23 @@ goes blank. The current season's NASS "YEAR" row is USDA's latest forecast, not 
 final: it counts as final only when loaded after the following January. The
 portal's role needs SELECT on `JSA.NASS_CACHE.NASS_CACHE` (granted 2026-10-04).
 
+**Where NASS skipped the county** (spec 01b, `baselines.py`): NASS publishes
+fewer counties each year, so a matched county can lack the figure. The chain is
+the county's own figure, then its own straight-line trend for a one-year gap
+(`last season` and same-season finals only; 5+ finals with one next to the gap),
+then the counties around it, weighted by 1/distance between centre points. The
+bordering ring comes first, widening to the second and third rings while fewer
+than 3 have the figure; at least 2 are needed. Last comes the state, tagged
+`state fallback` and kept out of the headline medians (`analysis.summarize`). A
+town or region is tagged `state`, and is counted. Each baseline's source is in
+`avg5_level` / `ly_level` / `final_level`; the neighbor FIPS used aren't stored.
+In 2026, 64 of 164 reports moved from the state's 5-season average to their
+neighbors'. Geography comes from `COUNTY_GEO` (`geo.py`; Census 2023 gazetteer
+centre points + county adjacency, public domain, loaded by
+`python load_geo.py [--target snowflake]`). Without that table the neighbor step
+is skipped. Not done: matching the report's irrigation to NASS's irrigated or
+non-irrigated county yields.
+
 County matching (`places.py`) works on a key derived from the location; the text
 itself never changes. A county named with a county word ("Northern Vermilion
 County") or several ("Moultrie/Coles Co") is used straight away; a near-spelling

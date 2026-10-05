@@ -10,7 +10,11 @@ Every report gets three ratios (its yield, the first figure it gives, divided by
                                                        latest forecast in-season
 Reports run optimistic (farmers report good fields), so a ratio near 1.10 is
 normal; the signal is this season's ratio against earlier seasons' ratios. A
-county baseline takes out which counties happened to report.
+county baseline takes out which counties happened to report. Where NASS
+skipped the county, baselines.py fills in from the county's own trend or the
+counties around it before falling back to the state; each baseline says which
+(the *_level columns). A place that isn't a county (a town, a region) uses its
+state.
 
 Medians, not means, and every report counts once (acres are not used). Each
 number carries its report count and a confidence label. Thin counties are pulled
@@ -18,8 +22,11 @@ toward their state (shown both raw and pulled). No trend line: too few seasons.
 """
 import pandas as pd
 
+import baselines
+
 TIERS = [(10, "Firmer"), (3, "Directional"), (0, "Too few")]
 SHRINK_K = 3          # a county's own reports count against 3 reports' worth of its state
+COUNTY_LEVELS = ("county", "own trend", "neighbors")     # a baseline for the report's county
 
 
 def tier(n) -> str:
@@ -27,37 +34,43 @@ def tier(n) -> str:
     return next(label for floor, label in TIERS if n >= floor)
 
 
-def _mean_or_none(vals):
-    vals = [v for v in vals if v is not None and v == v]
-    return sum(vals) / len(vals) if vals else None
+def _ok(v):
+    return v is not None and v == v
 
 
-def attach(reports: pd.DataFrame, county_tbl: pd.DataFrame, state_tbl: pd.DataFrame) -> pd.DataFrame:
+def attach(reports: pd.DataFrame, county_tbl: pd.DataFrame, state_tbl: pd.DataFrame,
+           geo_frame: pd.DataFrame = None) -> pd.DataFrame:
     """reports (with county_method / county_fips from places.match_all) ->
-    + baselines (avg5, ly, usda, usda_label, county_final), the level each came
-    from, and the ratios r_avg5, r_ly, r_usda, r_final."""
-    ck = county_tbl.set_index(["crop", "fips", "year"])
+    + baselines (avg5, ly, usda, usda_label, county_final), where each came from
+    (avg5_level / ly_level / final_level: county, own trend, neighbors, state for a
+    place that isn't a county, state fallback for a county nothing else covered),
+    and the ratios r_avg5, r_ly, r_usda, r_final. `geo_frame` (geo.load()) lets the
+    neighbor step run; without it a county NASS skipped falls to its state."""
+    cb = baselines.CountyBaselines(county_tbl, baselines.Geo(geo_frame))
     sk = state_tbl.set_index(["crop", "state", "year"])
     rows = []
     for r in reports.itertuples(index=False):
         yr = int(r.crop_year)
         use_county = r.county_method in ("exact", "several", "confirmed") and r.county_fips
-        c = {"final": None, "ly": None, "avg5": None}
+        c, src = {"final": None, "ly": None, "avg5": None}, {}
         if use_county:
-            hits = [ck.loc[(r.crop, f, yr)] for f in r.county_fips if (r.crop, f, yr) in ck.index]
             for k in c:
-                c[k] = _mean_or_none([h[k] for h in hits])
+                c[k], src[k] = cb.combined(r.crop, r.county_fips, yr, k)
         s = sk.loc[(r.crop, r.state, yr)] if (r.crop, r.state, yr) in sk.index else None
-        s_avg5 = None if s is None else s["avg5"]
-        s_ly = None if s is None else s["ly"]
-        avg5, avg5_lvl = (c["avg5"], "county") if c["avg5"] else (s_avg5, "state")
-        ly, ly_lvl = (c["ly"], "county") if c["ly"] else (s_ly, "state")
+        state_lvl = "state fallback" if use_county else "state"
+        base = {}
+        for k in ("avg5", "ly"):
+            if c[k] is not None:
+                base[k] = (c[k], src[k])
+            else:
+                sv = None if s is None else s[k]
+                base[k] = (sv, state_lvl) if _ok(sv) else (None, None)
         rows.append({
-            "base_avg5": avg5, "avg5_level": avg5_lvl if avg5 else None,
-            "base_ly": ly, "ly_level": ly_lvl if ly else None,
+            "base_avg5": base["avg5"][0], "avg5_level": base["avg5"][1],
+            "base_ly": base["ly"][0], "ly_level": base["ly"][1],
             "base_usda": None if s is None else s["current"],
             "usda_label": None if s is None else s["current_label"],
-            "county_final": c["final"],
+            "county_final": c["final"], "final_level": src.get("final") if c["final"] else None,
         })
     out = pd.concat([reports.reset_index(drop=True), pd.DataFrame(rows)], axis=1)
     for col in ("base_avg5", "base_ly", "base_usda", "county_final"):
@@ -73,9 +86,15 @@ def attach(reports: pd.DataFrame, county_tbl: pd.DataFrame, state_tbl: pd.DataFr
 
 
 def summarize(g: pd.DataFrame) -> dict:
-    """Medians and counts for one group of reports."""
+    """Medians and counts for one group of reports. A ratio against a state
+    fallback (a county nothing nearer covered) stays out of them (spec 01b)."""
+    level = {"r_avg5": "avg5_level", "r_ly": "ly_level"}
+
     def med(col):
-        s = g[col].dropna()
+        s = g[col]
+        if col in level and level[col] in g:
+            s = s[g[level[col]] != "state fallback"]
+        s = s.dropna()
         return (float(s.median()) if len(s) else None), int(len(s))
     out = {"n": int(g["yield_bpa"].notna().sum())}
     for col in ("r_avg5", "r_ly", "r_usda", "pair_ly_pct", "pair_aph_pct"):
@@ -98,11 +117,12 @@ def by_year(rep: pd.DataFrame, key=None) -> pd.DataFrame:
 
 
 def counties(rep: pd.DataFrame, state_median: float) -> pd.DataFrame:
-    """One row per matched county (reports with a county baseline): raw median
-    ratio to the 5-season average, and pulled toward the state's median by report
-    count: (n x raw + k x state) / (n + k)."""
+    """One row per matched county (reports with a county baseline, its own or
+    filled in from nearby counties): raw median ratio to the 5-season average,
+    and pulled toward the state's median of the reports' ratios (not toward the
+    state's NASS yield) by report count: (n x raw + k x state) / (n + k)."""
     import places
-    c = rep[rep["avg5_level"] == "county"].copy()
+    c = rep[rep["avg5_level"].isin(COUNTY_LEVELS)].copy()
     c["county"] = c["county_names"].map(lambda ns: " / ".join(places.pretty(n) for n in ns))
     rows = []
     for name, g in c.groupby("county"):
@@ -111,5 +131,7 @@ def counties(rep: pd.DataFrame, state_median: float) -> pd.DataFrame:
         pulled = (None if raw is None or state_median is None
                   else (n * raw + SHRINK_K * state_median) / (n + SHRINK_K))
         rows.append({"county": name, "n": n, "raw": raw, "pulled": pulled, "tier": tier(n),
-                     "avg5": float(g["base_avg5"].median()), "ly": g["base_ly"].median()})
-    return pd.DataFrame(rows, columns=["county", "n", "raw", "pulled", "tier", "avg5", "ly"])
+                     "avg5": float(g["base_avg5"].median()), "ly": g["base_ly"].median(),
+                     "baseline": g["avg5_level"].mode().iloc[0]})
+    return pd.DataFrame(rows, columns=["county", "n", "raw", "pulled", "tier", "avg5", "ly",
+                                       "baseline"])
