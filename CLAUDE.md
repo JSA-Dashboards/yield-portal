@@ -35,8 +35,14 @@ gitignored, on Kolten's PC only. Read `CLAUDE.local.md` when it's there.
   no crop or state is stored anyway and waits as **Needs crop/state**
   (`incomplete` check) instead of being lost. When the task has to start Outlook
   itself (no window), it waits up to 4 minutes for the cache to settle before
-  reading. Moving this to the droplet needs Microsoft Graph mail access from IT
-  (the basis tracker's pending request).
+  reading.
+- **Emails from the server (the Droplet path)**: `--source graph` reads the
+  whole mailbox through Microsoft Graph instead (`graph_mail.py`: app-only
+  OAuth, every folder, HTML body → Outlook-style text). The saved emails parse
+  identically both ways (local test). `deploy/run_email_sync.sh` +
+  `deploy/DROPLET.md` hold the Droplet setup. **Blocked on IT**: the tenant's
+  only Graph app has Mail.Send, not Mail.Read (checked 2026-10-04), and
+  `graph_mail` says so instead of a bare 403. Until then the PC task stays.
 - **Emails, one at a time**: paste on **Add reports** — same parser and matcher.
 - **By hand**: **Add reports → Enter by hand**.
 - **JSA's own reports**: not every report is Ag Trader Talk's. Add reports has a

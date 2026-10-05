@@ -1,0 +1,2 @@
+# shell scripts run on the Linux droplet: keep LF
+*.sh text eol=lf
