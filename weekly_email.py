@@ -3,7 +3,7 @@ The weekly yield-report email (Tuesday mornings, to the JSA group).
 
     python weekly_email.py --preview                     # logs/weekly_preview.html, nothing sent
     python weekly_email.py --to someone@jpsi.com         # send it now (a test)
-    pythonw weekly_email.py --to <group> --scheduled     # the scheduled task: once a week, logged
+    python weekly_email.py --scheduled --via graph       # the Droplet's cron job: once a week, logged
 
 For the current crop year, per crop, the Explore headline tiles (data.headline,
 with % changes) and two charts (reported yields by crop year; average by state,
@@ -16,19 +16,27 @@ except superseded and excluded ones, as Report text does.
 "The past week" is the seven days before the send day, Tuesday to Monday for a
 Tuesday send, so each report date lands in exactly one email.
 
-Sent through classic Outlook over COM, as Kolten: Microsoft Graph mail is
-blocked by IT and SMTP is refused. .Send() only queues the message in the
-Outbox, and in cached Exchange mode Outlook sends it on its own send/receive
-cycle, so the script waits for the Outbox to drain (up to 35 minutes).
---scheduled sends at most once per ISO week (logs/weekly_email.json), so a
-catch-up run after the PC was off doesn't send twice. The recipient is passed
-on the command line (the scheduled task's), not kept here.
+Two ways to send:
+  --via graph    Microsoft Graph sendMail, app-only, as the shared mailbox in
+                 GRAPH_SENDER (the basis tracker's app, which IT gave Mail.Send).
+                 This is how the Droplet sends it. The GRAPH_* settings come
+                 from the environment, or from the .env named by GRAPH_ENV_FILE
+                 (on the Droplet, the basis tracker's: one copy of the secret to
+                 rotate). Shown as WEEKLY_EMAIL_FROM_NAME; replies go to
+                 WEEKLY_EMAIL_REPLY_TO.
+  --via outlook  classic Outlook over COM, as Kolten (the PC). .Send() only
+                 queues it, and cached Exchange mode sends on Outlook's own
+                 cycle, so the script waits up to 35 minutes for the Outbox to
+                 drain.
+--scheduled sends at most once per ISO week, checked against the WEEKLY_EMAILS
+table, so a catch-up run, or a second machine left scheduled, can't send it
+twice. Its recipient is --to or WEEKLY_EMAIL_TO; addresses stay out of this
+public repo.
 """
 import argparse
 import base64
 import datetime as dt
 import html
-import json
 import os
 import pathlib
 import socket
@@ -45,7 +53,6 @@ except ModuleNotFoundError:
     pass
 
 LOG = HERE / "logs" / "weekly_email.log"
-STATE = HERE / "logs" / "weekly_email.json"
 
 if "--scheduled" in sys.argv:          # before Streamlit is imported: its warnings land in the log
     LOG.parent.mkdir(exist_ok=True)
@@ -101,7 +108,8 @@ def counted(df, crop):
 # --- charts (Altair -> PNG, embedded) ------------------------------------------------
 def _png(chart) -> bytes:
     import vl_convert as vlc
-    chart = (chart.configure(font="Segoe UI")
+    # Segoe UI on the PC; the Droplet (Linux) has none of it, so fall back
+    chart = (chart.configure(font="Segoe UI, Liberation Sans, DejaVu Sans, Arial, sans-serif")
              .configure_view(stroke=None)
              .configure_title(fontSize=13, anchor="start", color=DARK, fontWeight=600)
              .configure_axis(labelColor=GRAY, titleColor=GRAY, gridColor="#eef2f6",
@@ -317,6 +325,57 @@ def preview_html(body, images):
 
 
 # --- sending ---------------------------------------------------------------------------
+def _graph_cfg():
+    """The sending app (Mail.Send): GRAPH_* from the environment, else from the
+    .env that GRAPH_ENV_FILE names (graph_mail.setting)."""
+    from graph_mail import setting
+    cfg = {k: setting(k) for k in
+           ("GRAPH_TENANT_ID", "GRAPH_CLIENT_ID", "GRAPH_CLIENT_SECRET", "GRAPH_SENDER")}
+    missing = [k for k, v in cfg.items() if not v]
+    if missing:
+        raise RuntimeError("Sending through Graph needs " + ", ".join(missing))
+    return cfg
+
+
+def send_graph(to, subject, body, images, on_queued=None):
+    """Microsoft Graph sendMail as the shared mailbox, images inline by Content-ID.
+    Graph takes it straight away (202), so there's no Outbox to wait on. -> True."""
+    import msal
+    import requests
+    cfg = _graph_cfg()
+    app = msal.ConfidentialClientApplication(
+        cfg["GRAPH_CLIENT_ID"], client_credential=cfg["GRAPH_CLIENT_SECRET"],
+        authority=f"https://login.microsoftonline.com/{cfg['GRAPH_TENANT_ID']}")
+    tok = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
+    if "access_token" not in tok:
+        raise RuntimeError(f"Graph sign-in failed: {tok.get('error_description') or tok.get('error')}")
+    sender = cfg["GRAPH_SENDER"]
+    message = {
+        "subject": subject,
+        "body": {"contentType": "HTML", "content": body},
+        "toRecipients": [{"emailAddress": {"address": a.strip()}} for a in to.split(",") if a.strip()],
+        # the shared mailbox's directory name would show otherwise
+        "from": {"emailAddress": {"address": sender,
+                                  "name": os.environ.get("WEEKLY_EMAIL_FROM_NAME") or "JSA Yield Reports"}},
+        "attachments": [{"@odata.type": "#microsoft.graph.fileAttachment", "name": f"{cid}.png",
+                         "contentType": "image/png", "contentId": cid, "isInline": True,
+                         "contentBytes": base64.b64encode(png).decode("ascii")}
+                        for cid, png in images.items()],
+    }
+    reply_to = os.environ.get("WEEKLY_EMAIL_REPLY_TO", "").strip()
+    if reply_to:
+        message["replyTo"] = [{"emailAddress": {"address": reply_to}}]
+    r = requests.post(f"https://graph.microsoft.com/v1.0/users/{sender}/sendMail",
+                      headers={"Authorization": f"Bearer {tok['access_token']}"},
+                      json={"message": message, "saveToSentItems": True}, timeout=60)
+    if r.status_code not in (200, 202):
+        raise RuntimeError(f"Graph sendMail failed [{r.status_code}]: {r.text[:300]}")
+    print(f"Sent through Graph as {sender}: '{subject}' -> {to}")
+    if on_queued:
+        on_queued()
+    return True
+
+
 def send(to, subject, body, images, wait_minutes=35, on_queued=None):
     """Queue it in classic Outlook, images embedded, then wait for the Outbox to drain.
     `on_queued` runs once Outlook has taken it. -> True once sent, False if it's
@@ -361,13 +420,6 @@ def send(to, subject, body, images, wait_minutes=35, on_queued=None):
     return False
 
 
-def _sent_weeks():
-    try:
-        return json.loads(STATE.read_text(encoding="utf-8"))
-    except (FileNotFoundError, ValueError):
-        return {}
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--preview", nargs="?", const=str(HERE / "logs" / "weekly_preview.html"),
@@ -375,19 +427,26 @@ def main():
                          "nothing is sent")
     ap.add_argument("--to", help="send it to this address now")
     ap.add_argument("--scheduled", action="store_true",
-                    help="the scheduled task: send to --to at most once per ISO week, logged")
+                    help="the scheduled job: send to --to (else WEEKLY_EMAIL_TO) at most once "
+                         "per ISO week, logged")
+    ap.add_argument("--via", choices=["outlook", "graph"], default="outlook",
+                    help="outlook: classic Outlook over COM (the PC); graph: Microsoft Graph as "
+                         "GRAPH_SENDER (the Droplet)")
     ap.add_argument("--today", type=dt.date.fromisoformat, default=dt.date.today(),
                     help="pretend it's this day (YYYY-MM-DD), for previews")
     args = ap.parse_args()
-    if not args.preview and not args.to:
-        ap.error("give --preview, or --to an address to send to")
+    to = args.to or (os.environ.get("WEEKLY_EMAIL_TO", "").strip() if args.scheduled else None)
+    if not args.preview and not to:
+        ap.error("give --preview, or --to an address (--scheduled also reads WEEKLY_EMAIL_TO)")
 
     day = send_day(args.today)
     key = f"{day.isocalendar().year}-W{day.isocalendar().week:02d}"
-    sent = _sent_weeks()
-    if args.scheduled and key in sent:
-        print(f"Already sent for {key} ({sent[key]}); nothing to do.")
-        return
+    if args.scheduled:
+        prior = db.weekly_email_sent(key)
+        if prior:
+            print(f"Already sent for {key} ({prior['sent_at']} UTC from {prior['host']} via "
+                  f"{prior['via']}); nothing to do.")
+            return
 
     subject, body, images, counts = build(args.today)
     print(subject, counts)
@@ -396,12 +455,11 @@ def main():
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(preview_html(body, images), encoding="utf-8")
         print(f"Preview written to {out}")
-    if args.to:
-        def record():                 # once queued: a catch-up run must not send it twice
-            sent[key] = f"{dt.datetime.now():%Y-%m-%d %H:%M} to {args.to}"
-            STATE.parent.mkdir(exist_ok=True)
-            STATE.write_text(json.dumps(sent, indent=1), encoding="utf-8")
-        ok = send(args.to, subject, body, images, on_queued=record if args.scheduled else None)
+    if to:
+        def record():                 # once it's gone: nothing sends this week's again
+            db.record_weekly_email(key, socket.gethostname(), to, args.via)
+        sender = send_graph if args.via == "graph" else send
+        ok = sender(to, subject, body, images, on_queued=record if args.scheduled else None)
         if not ok:
             sys.exit(2)
 

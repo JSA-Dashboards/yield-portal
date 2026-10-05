@@ -8,8 +8,13 @@ ApplicationAccessPolicy limiting it to the one mailbox it reads. Until IT grants
 that, its token carries only Mail.Send and `read_emails` stops with a clear
 error instead of a bare 403.
 
-    GRAPH_TENANT_ID, GRAPH_CLIENT_ID, GRAPH_CLIENT_SECRET   the app
-    YIELD_MAILBOX                                           the mailbox to read
+    GRAPH_TENANT_ID                                   the tenant
+    GRAPH_READ_CLIENT_ID, GRAPH_READ_CLIENT_SECRET    the reading app, if it's its own
+                                                      (else GRAPH_CLIENT_ID / _SECRET)
+    YIELD_MAILBOX                                     the mailbox to read
+
+Each is read from the environment, else from the .env that GRAPH_ENV_FILE names
+(on the Droplet, the basis tracker's: one copy of its secret to rotate).
 
 Reads each message's stored HTML (what a saved .msg holds) and turns it into
 text laid out the way Outlook's .Body lays it out: paragraphs, <br> and list
@@ -88,9 +93,24 @@ def html_to_text(content: str) -> str:
 
 
 # --- Graph ---------------------------------------------------------------------------
+def setting(name: str) -> str:
+    """A Graph setting from the environment, else from the .env named by GRAPH_ENV_FILE."""
+    value = os.environ.get(name, "").strip()
+    extra = os.environ.get("GRAPH_ENV_FILE", "").strip()
+    if not value and extra:
+        from dotenv import dotenv_values
+        value = (dotenv_values(extra).get(name) or "").strip()
+    return value
+
+
 def _config():
-    cfg = {k: os.environ.get(k, "").strip() for k in
-           ("GRAPH_TENANT_ID", "GRAPH_CLIENT_ID", "GRAPH_CLIENT_SECRET", "YIELD_MAILBOX")}
+    """The reading app: its own GRAPH_READ_* pair when IT made one, else the
+    shared GRAPH_CLIENT_* app (if Mail.Read was added to it instead)."""
+    own = bool(setting("GRAPH_READ_CLIENT_ID"))
+    cfg = {"GRAPH_TENANT_ID": setting("GRAPH_TENANT_ID"),
+           "GRAPH_CLIENT_ID": setting("GRAPH_READ_CLIENT_ID" if own else "GRAPH_CLIENT_ID"),
+           "GRAPH_CLIENT_SECRET": setting("GRAPH_READ_CLIENT_SECRET" if own else "GRAPH_CLIENT_SECRET"),
+           "YIELD_MAILBOX": setting("YIELD_MAILBOX")}
     missing = [k for k, v in cfg.items() if not v]
     if missing:
         raise RuntimeError("Graph email reading needs " + ", ".join(missing))
