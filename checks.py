@@ -22,7 +22,7 @@ CHECKS = {
     "duplicate": "Same place, crop, year and yield as another report",
 }
 CORN_RANGE = (50, 300)
-SOY_RANGE = (10, 100)
+SOY_RANGE = (10, P.SOY_MAX)
 # What the parser extracts and a re-read can change; only the figures the
 # analysis uses raise a flag.
 REREAD_FIELDS = ["yield_bpa", "yield_min", "yield_max", "ly_yield", "expected_yield"]
