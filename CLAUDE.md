@@ -53,6 +53,19 @@ gitignored, on Kolten's PC only. Read `CLAUDE.local.md` when it's there.
   it again (a pasted JSA report that matches an Ag Trader Talk row adds a "JSA
   reported this too" note), and the `duplicate` check catches a repeat it misses;
   the review queue shows each copy's source.
+- **Seed-company plots**: only plot results customers share with JSA. Pioneer's
+  terms forbid even manual scraping, and Beck's and AgriGold reserve all rights,
+  so their websites are never collected from. The Add reports **Seed plot**
+  source takes a plot's whole history as a table, one row per season (company,
+  place, plot average across entries, entries, notes), stored as
+  `report_source = "plot"` with the company in `source_file`. Plots are their own
+  source (`data.HEADLINE_SOURCES` leaves them out). They're off by default on
+  Explore, kept out of the Reports vs normal headline and out of the weekly
+  email's tiles and charts, and tagged "<company> plot" in Report text and the
+  email. **Read against their own history** (`plots.py`): each plot season against
+  the straight-line trend of that plot's earlier seasons (5+ needed) and the
+  same plot last season. The NASS comparison is shown only for a plot with too
+  little history (Kolten: "regress its own history").
 - **Email format traps** (all in `parse_email` / `_email_lines`): the mail
   filter puts the report in `.Body` twice (preview + zero-width padding before
   its banner, real body after) — keep only what follows the banner; `*<tab>`

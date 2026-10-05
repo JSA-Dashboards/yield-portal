@@ -10,8 +10,8 @@ VIEW_ONLY = st.session_state.get("view_only", False)
 
 st.title("Report text")
 st.caption("Every report in its own words, laid out like the yield PDF: crop, then state, "
-           "with the date it was reported. Ag Trader Talk's reports and JSA's own "
-           "(tagged JSA).")
+           "with the date it was reported. Ag Trader Talk's reports, JSA's own (tagged JSA), "
+           "and seed plots customers shared (tagged with the company).")
 
 try:
     df = data.load_all()

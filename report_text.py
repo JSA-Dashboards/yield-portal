@@ -86,13 +86,25 @@ def _highlight(text: str, query: str) -> str:
                    for i, p in enumerate(parts) if p)
 
 
-def md_report(raw, location, state, query: str = "", source=None) -> str:
+def source_tag(source, company=None):
+    """The tag a report carries beside its text: 'JSA', '<company> plot', or ''
+    for Ag Trader Talk's (most of them)."""
+    if source == "JSA":
+        return "JSA"
+    if source == "Seed plot":
+        return f"{company} plot" if isinstance(company, str) and company else "Seed plot"
+    return ""
+
+
+def md_report(raw, location, state, query: str = "", source=None, company=None) -> str:
     """One report as Markdown: bold place label, then the text, with any search
-    term highlighted; JSA's own reports carry a JSA tag (the rest are Ag Trader
-    Talk's)."""
+    term highlighted; JSA's own reports and seed plots carry a tag (the rest are
+    Ag Trader Talk's)."""
     label, body = label_and_body(raw, location, state)
     head = f"**{_highlight(label, query)}** " if label else ""
-    return head + _highlight(body, query) + (" :blue-badge[JSA]" if source == "JSA" else "")
+    tag = source_tag(source, company)
+    color = "blue" if source == "JSA" else "orange"
+    return head + _highlight(body, query) + (f" :{color}-badge[{md_escape(tag)}]" if tag else "")
 
 
 def md_table(rows: pd.DataFrame, query: str = "", dates: bool = True) -> str:
@@ -105,7 +117,7 @@ def md_table(rows: pd.DataFrame, query: str = "", dates: bool = True) -> str:
         cells = [f":gray[{day_label(r.date_reported)}]" if day_label(r.date_reported) else ""] \
             if dates else []
         cells.append(md_report(r.raw_text, r.location, r.state, query,
-                               getattr(r, "source", None)))
+                               getattr(r, "source", None), getattr(r, "source_file", None)))
         out.append("| " + " | ".join(cells) + " |")
     return "\n".join(out)
 
@@ -136,8 +148,9 @@ def report_html(df: pd.DataFrame, title: str, subtitle: str) -> str:
                            + (f"<span class='d'>{day}&nbsp;&nbsp;</span>" if day else "")
                            + (f"<b>{e(label)}</b> " if label else "")
                            + f"{e(body)}"
-                           + (" <span class='d'>(JSA)</span>"
-                              if getattr(r, "source", None) == "JSA" else "")
+                           + (f" <span class='d'>({e(tag)})</span>" if (tag := source_tag(
+                               getattr(r, "source", None), getattr(r, "source_file", None)))
+                              else "")
                            + "</p>")
     return "".join(out)
 
@@ -202,8 +215,9 @@ def to_docx(df: pd.DataFrame, title: str, subtitle: str) -> bytes:
                 if label:
                     p.add_run(label + " ").bold = True
                 p.add_run(body)
-                if getattr(r, "source", None) == "JSA":
-                    p.add_run(" (JSA)").font.color.rgb = gray
+                tag = source_tag(getattr(r, "source", None), getattr(r, "source_file", None))
+                if tag:
+                    p.add_run(f" ({tag})").font.color.rgb = gray
     out = io.BytesIO()
     doc.save(out)
     return out.getvalue()

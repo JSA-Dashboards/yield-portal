@@ -61,9 +61,11 @@ with st.sidebar:
                           help="Shows reports naming any of the selected items.")
     silage = st.toggle("Include silage numbers", value=False, key="ex_silage",
                        disabled=crop != "Corn")
-    sources = st.pills("Source", data.SOURCES, selection_mode="multi", default=data.SOURCES,
-                       key="ex_sources",
-                       help="Ag Trader Talk's emails and PDFs, or JSA's own reports.")
+    sources = st.pills("Source", data.SOURCES, selection_mode="multi",
+                       default=data.HEADLINE_SOURCES, key="ex_sources",
+                       help="Ag Trader Talk's emails and PDFs, JSA's own reports, and seed-company "
+                            "plot results customers shared. Plots are off by default: they run "
+                            "well above county averages and companies choose what they publish.")
     q = st.text_input("Search", placeholder="County, town, or any word", key="ex_q")
 
 if not years:
@@ -254,7 +256,7 @@ with st.container(border=True):
 
 # --- the reports themselves ---------------------------------------------------
 cols = ["crop_year", "date_reported", "state", "location", "yield_bpa", "ly_yield",
-        "vs_ly", "aph", "maturity", "irrigation", "disease", "raw_text", "source"]
+        "vs_ly", "aph", "maturity", "irrigation", "disease", "raw_text", "source", "source_file"]
 table = f[cols].sort_values(["crop_year", "state", "location"],
                             ascending=[False, True, True], na_position="last")
 with st.container(border=True):
@@ -279,6 +281,8 @@ with st.container(border=True):
             "disease": "Disease / damage",
             "raw_text": st.column_config.TextColumn("Report", width="large"),
             "source": "Source",
+            "source_file": st.column_config.TextColumn(
+                "From", help="The annual PDF a report came from, or a seed plot's company."),
         },
     )
     if not VIEW_ONLY:
