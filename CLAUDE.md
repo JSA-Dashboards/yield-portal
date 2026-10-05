@@ -251,16 +251,29 @@ links `ST2006128A_Final_Report.pdf` where ISA's case-sensitive server has `ST200
 (a 404), so `_report` retries with the suffix letter's case swapped. A 404 is never retried
 as-is.
 
-The yields are only in the reports, which have changed layout several times
-(`isa_trials.LAYOUTS`, named by the first season seen). **ISA's listed response is the
-check**: a reading counts only when the gap between its treatments matches the response in
-ISA's trial list (to 0.1 bu, or 1 bu for whole-bushel figures). The list's treatment count
-can be wrong for the report ("A vs B vs C" over a report that compared two), so when a
-response is listed, 2-6 treatments are tried. Nothing agreeing → `unread`, never a guess.
-For example, a "soybean" trial whose report shows corn yields stays out. The field yield is
-the mean of the treatment averages. Statuses: `read`, `unverified` (no listed response; none
-so far), `unread`, `no report`. **`python tests/test_isa_trials.py` after any change**:
-made-up fragments, one per layout.
+The yields are only in the reports, which have changed layout many times
+(`isa_trials.LAYOUTS`, named by the first season seen; labels tolerate the stray spaces
+some fonts put inside words, values may carry significance letters). **ISA's listed
+response is the check**: a reading counts when some pair of its treatments is that far
+apart (0.1 bu, or 1 bu for whole-bushel figures). A layout that is the treatment table
+itself (`whole`: 2023 grouped, 2021, lettered 2018L, 2012w) is read entire, so a field's
+level is the mean of every treatment even when the list names two of five. Other layouts
+try the list's count, then the run's own (the list miscounts both ways). Traps hit:
+taking 3 of a 4-treatment run; the 2010 layout's last number is ALWAYS the difference
+(773 of 773), and for corn it can look like a yield (48.2). For three or more treatments
+ISA's response isn't one defined pair (sometimes the LSD), so an exact-count clean run is
+taken as `unverified`. Nothing fitting → `unread`, never a guess.
+
+**One field, several entries:** ISA lists some fields under two or more comparisons (`…A`
+and `…A1` share one report; `…0035a` has no report of its own). `field_id` = md5 of the
+report text; `isa_trials.fields()` keeps one row per field (the most treatments), and the
+page's chart and figures use it. **Crop:** ISA's list mislabels some trials (2017-18 cover
+crop trials "corn" at ~60 bu), and some reports' rotation lines are wrong the other way,
+so where they disagree the yields decide (`settle_crop`: under 100 bu = soybeans);
+`listed_crop` keeps ISA's. Statuses: `read`, `unverified`, `unread`, `same field`, `no
+report`. As loaded 2026-10-05: 4,680 of 4,749 reports read (4,600 fields), 69 unread, 3
+missing. **`python tests/test_isa_trials.py` after any change**: made-up fragments, one per
+layout; then re-run every cached report and diff against the previous readings.
 
 **Internal**: ISA states its copyright and no other terms. The page is registered only
 when `not VIEW_ONLY`, and the report text never goes in the repo.
