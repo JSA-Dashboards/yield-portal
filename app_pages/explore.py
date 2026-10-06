@@ -22,7 +22,7 @@ GROUP_GAP = alt.Scale(paddingInner=0.18)      # between a category's year bars
 CATEGORY_GAP = alt.Scale(paddingInner=0.3)    # between categories
 
 st.title("Yield reports")
-st.caption("County field reports from Ag Trader Talk and JSA, harvest 2023 onward. "
+st.caption("Reports from harvest 2023 onward. "
            "Averages are of the reports themselves, not county or state estimates.")
 
 try:
