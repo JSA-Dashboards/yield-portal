@@ -141,13 +141,18 @@ The rows keep the **same full text**; each reads its own figures from its entry
 entry's, disease the whole report's). Each hash adds its part (`dedup_hash(...,
 part)`, carried as `_part` before insert, never stored): a practice with one entry is
 just the practice ("Irrigated", as the 2026-10-05 practice split hashed it), several
-are numbered ("Non-irrigated|2", "entry|1"). `reread` reads a row as the entry with its
-practice and yield; the duplicate check never pairs rows of one text, nor different
+are numbered ("Non-irrigated|2", "entry|1"). `reread` reads a row as its own entry
+(by hash, `checks.entry_hash`: two fields of one report can share a yield), else as
+the entry with its practice and yield; the duplicate check never pairs rows of one text, nor different
 practices; `report_text.ordered` shows the shared words once. The fix keeps a stored
 row that already is an entry and gives it its entry's figures when the yields agree
 (`checks.entry_changes`, the suggestion's `updates`: an irrigated half split on
 2026-10-05 had the report's first APH, not its own). Entry hashes use None for a blank field,
-as the parser does (`dedup_hash` puts "None" in the key; pandas has NaN). New reports split at
+as the parser does (`dedup_hash` puts "None" in the key; pandas has NaN). A split
+supersedes the report's row, and with it any decision a person made on it: the new
+entries can raise the same flag again (a "kept: not the same report" duplicate, an
+approved range). Carry those decisions to the entries (the 2026-10-06 batch carried
+3; REVIEW_DECISIONS keeps one row per report, Time Travel shows the one before). New reports split at
 parse time (`by_entry`, in `parse_lines` and `parse_email`); on **Add reports → Enter
 by hand**, leaving Yield and Irrigation empty saves one report per entry, keyed-in
 fields kept. 78 PDF reports split this way (1,271 rows → 1,394).

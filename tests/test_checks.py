@@ -178,6 +178,12 @@ stale = [dict(old_halves[0], aph=57.0), old_halves[1]]      # split with the rep
 so = checks.run(pd.DataFrame(stale), {})
 check("a kept entry read with another entry's APH takes its own",
       so.loc[0, "suggestion"]["updates"], {kids[2]["dedup_hash"]: {"aph": 71.0}})
+twins = checks.entry_rows(row("Saline Co, NE 40 acres made 48 bpa vs 60 bpa last year, 80 acres "
+                              "made 48 bpa vs 55 bpa last year.", crop="Soybeans", state="NE",
+                              location="Saline Co"))
+check("two fields with one yield: each re-read as itself, not the first with that yield",
+      ([t["ly_yield"] for t in twins], checks.run(pd.DataFrame(twins), {})["review_flags"].tolist()),
+      ([60, 55], [[], []]))
 moved = [dict(old_halves[0], yield_bpa=70.0, aph=57.0), old_halves[1]]
 check("...but not when a person changed its yield",
       checks.run(pd.DataFrame(moved), {}).loc[0, "suggestion"]["updates"], {})
