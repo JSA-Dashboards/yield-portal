@@ -162,16 +162,16 @@ _ROAD = re.compile(r"(?:hwy|highway|route|rte|interstate|i-)\s*$", re.I)
 _PRE_DELTA = re.compile(   # "down 12 bu", "better than expected by about 10 bu"
     r"\b(down|up|off|by|plus|minus)(?:\s+(?:about|around|roughly|approximately|"
     r"nearly|almost|just|over))?\s*$", re.I)
-_POST_DELTA = re.compile(
+_POST_DELTA = re.compile(    # "10bpa behind last year" is a difference, not LY 10
     r"^\s*(?:\w+\s+){0,2}?(better|less|more|worse|over|under|higher|lower|"
-    r"above|below|short|off)\b", re.I)
+    r"above|below|short|off|behind|ahead)\b", re.I)
 # [^\w.] — never look across a full stop: in "228 dry. 12 off last year" the
 # "last year" belongs to the next sentence, not to 230.
 # Intervening words must be plain words — not numbers ("68 bpa vs 73 last year":
 # the "last year" is 76's) and not comparisons ("241 bpa, above last year": 238
 # is this year's, compared to last year).
 _COMPARE = (r"above|below|better|worse|over|under|than|higher|lower|compared|vs|"
-            r"versus|from|off|up|down|same|as|like|similar|to|of")
+            r"versus|from|off|up|down|same|as|like|similar|to|of|behind|ahead")
 _LY_POST = re.compile(
     r"^[^\w.]{0,3}(?:(?!(?:%s)\b)[A-Za-z]+\s+){0,2}?(last year|ly\b|a year ago|"
     r"year ago|prior year|in 20\d\d|last yr)" % _COMPARE, re.I)
@@ -457,9 +457,10 @@ def extract_maturity(text, crop):
 # Irrigation as stated in the report. "irrigated yields" is a figure of speech
 # ("irrigated yields on dry ground"), not a statement about the field;
 # \b after \w* stops backtracking from slipping past that lookahead.
-_NONIRR_RE = re.compile(r"dry\s?land|non[- ]?irrigat\w*|not irrigat\w*|rain[- ]?fed", re.I)
+# "non- irrigated": a PDF line wrapped after the hyphen
+_NONIRR_RE = re.compile(r"dry\s?land|non[- ]{0,2}irrigat\w*|not irrigat\w*|rain[- ]?fed", re.I)
 _IRR_RE = re.compile(
-    r"(?<!non-)(?<!non )(?<!not )\birrigat\w*\b(?!\s+yields)"
+    r"(?<!non-)(?<!non )(?<!non- )(?<!not )\birrigat\w*\b(?!\s+yields)"
     r"|under (?:a |the )?pivot|\bpivots?\b", re.I)
 
 
@@ -469,6 +470,33 @@ def extract_irrigation(text):
     if irr and non:
         return "Mixed"
     return "Irrigated" if irr else "Non-irrigated" if non else None
+
+
+# --- a report that gives yields for dryland and irrigated ground -------------------
+PRACTICES = ("Non-irrigated", "Irrigated")
+# The words only: a pivot can mark the dryland corners too ("outside the pivot").
+_PRACTICE_RE = re.compile(
+    r"(?P<non>dry\s?land|non[- ]{0,2}irrigat\w*|not irrigat\w*|rain[- ]?fed)"
+    r"|(?P<irr>(?<!non-)(?<!non )(?<!non- )(?<!not )\birrigat\w*\b(?!\s+yields))", re.I)
+
+
+def split_by_practice(text):
+    """{"Non-irrigated": its text, "Irrigated": its text} when a report gives
+    yields for both, else None. A figure belongs to the practice named last
+    before it ("dryland has averaged 150-200 bpa while irrigated 205-250"), so
+    each practice's text runs from where it's named to where the other is. No
+    split when a figure comes before either is named (whose is it?) or either
+    has no figure of its own."""
+    text = text or ""
+    marks = [(m.start(), PRACTICES[0] if m.group("non") else PRACTICES[1])
+             for m in _PRACTICE_RE.finditer(text)]
+    if len({p for _, p in marks}) < 2 or extract_yields(text[:marks[0][0]])[0]:
+        return None
+    parts = {}
+    for (start, practice), (end, _) in zip(marks, marks[1:] + [(len(text), None)]):
+        parts.setdefault(practice, []).append(text[start:end].strip())
+    parts = {p: " ".join(segs) for p, segs in parts.items()}
+    return parts if all(extract_yields(parts[p])[0] for p in PRACTICES) else None
 
 
 # Disease and damage named in the report, one normalised tag each. Weather damage
@@ -538,8 +566,13 @@ def _first(rx, text, groups=1):
     return None
 
 
-def extract_metrics(text, crop):
-    cur, ly, exp = extract_yields(text)
+def extract_metrics(text, crop, practice=None):
+    """The figures and tags a report gives. With a practice ('Irrigated' or
+    'Non-irrigated'), a report that gives yields for both reads only that
+    practice's figures (split_by_practice); the rest comes from the whole text."""
+    parts = split_by_practice(text) if practice else None
+    own = parts[practice] if parts and practice in parts else None
+    cur, ly, exp = extract_yields(own if own is not None else text)
     aph = _first(APH_RE, text, 2)
     if isinstance(aph, float) and not (20 <= aph <= 350):
         aph = None
@@ -552,7 +585,7 @@ def extract_metrics(text, crop):
         "expected_yield": exp[0] if exp else None,
         "aph": aph,
         "maturity": extract_maturity(text, crop),
-        "irrigation": extract_irrigation(text),
+        "irrigation": practice if own is not None else extract_irrigation(text),
         "disease": extract_disease(text),
         "is_silage": "silage" in text.lower(),
         "is_record": bool(re.search(r"\brecord\b|best ever|best .* ever|all[- ]time",
@@ -560,12 +593,42 @@ def extract_metrics(text, crop):
     }
 
 
-def dedup_hash(crop_year, crop, state, location, raw):
+def dedup_hash(crop_year, crop, state, location, raw, practice=None):
     """Stable row identity: same year/crop/state/location/text -> same hash,
-    regardless of case or how the PDF wrapped the line."""
+    regardless of case or how the PDF wrapped the line. The halves of a report
+    split by practice share its text, so they add their practice."""
     text = re.sub(r"\s+", " ", raw.lower()).strip()
-    key = f"{crop_year}|{crop}|{state}|{location}|{text}"
+    key = f"{crop_year}|{crop}|{state}|{location}|{text}" + (f"|{practice}" if practice else "")
     return hashlib.sha1(key.encode()).hexdigest()[:16]
+
+
+def row_hash(row):
+    """dedup_hash for a row as it stands: with its practice when it's one half
+    of a report that gives yields for both."""
+    practice = row.get("irrigation")
+    split = practice in PRACTICES and split_by_practice(row.get("raw_text"))
+    return dedup_hash(row["crop_year"], row["crop"], row["state"], row["location"],
+                      row.get("raw_text") or "", practice if split else None)
+
+
+def by_practice(row):
+    """A report -> [it], or one report per practice when its text gives yields for
+    both dryland and irrigated ground: the same words in each (raw_text), each
+    with its own practice's figures, its irrigation set, and a hash of its own.
+    A report with yields for both crops is left whole: the two-crop split comes
+    first (a person confirms it on Review & edit), then each crop's half can
+    split by practice ("non-irrigated corn ... 150. First non-irrigated beans 67"
+    would otherwise make 150 a soybean yield)."""
+    text = row.get("raw_text")
+    if not split_by_practice(text) or split_by_crop(text, row.get("crop")):
+        return [row]
+    out = []
+    for practice in PRACTICES:
+        r = dict(row)
+        r.update(extract_metrics(row["raw_text"], row.get("crop"), practice))
+        r["dedup_hash"] = row_hash(r)
+        out.append(r)
+    return out
 
 
 _ZERO_WIDTH = re.compile(r"[\u200b\u200c\u200d\ufeff]")   # email preview padding
@@ -597,10 +660,12 @@ def parse_pdf(src, crop_year, source_file=None):
 
 
 def parse_lines(lines, crop_year, default_crop=None, source_file=None,
-                report_source="pdf"):
+                report_source="pdf", split_practice=True):
     """Run the observation state machine over cleaned text lines: crop and
     state headers set context, a line opening with a location starts a row,
-    anything else continues the current row."""
+    anything else continues the current row. A report with yields for both
+    dryland and irrigated ground becomes one row per practice (by_practice);
+    parse_email splits after it settles each crop, so it asks not to."""
     obs = []
     crop = default_crop
     state_hdr = None
@@ -656,7 +721,7 @@ def parse_lines(lines, crop_year, default_crop=None, source_file=None,
                                      o["location"], o["raw_text"])
         o["report_source"] = report_source
         o["source_file"] = source_file
-    return obs
+    return [x for o in obs for x in by_practice(o)] if split_practice else obs
 
 
 # --- single emails ------------------------------------------------------------
@@ -831,13 +896,14 @@ def parse_email(subject, body, crop_year, date_reported=None):
     low_subj = (subject or "").lower()
     all_silage = "silage" in low_subj and not re.search(r"(?:and|&)\s+silage", low_subj)
     lines = _email_lines(body)
-    rows = parse_lines(lines, crop_year, report_source="email")
+    rows = parse_lines(lines, crop_year, report_source="email", split_practice=False)
     located = [r for r in rows if r.get("state")]
     if located:
         rows = located              # drop greeting lines that preceded the first report
     else:
         loc, st = _subject_location(subject)
         rows = [dict(r, crop_year=crop_year, state=st) for r in _lead_rows(lines, loc)]
+    out = []
     for r in rows:
         # a crop header/opener, then the report's own crop word, then the subject's
         known = r.get("crop") if r.get("crop") not in (None, "Unknown") else None
@@ -850,15 +916,16 @@ def parse_email(subject, body, crop_year, date_reported=None):
             r["crop"] = "Corn"
             r.update(extract_metrics(r["raw_text"], "Corn"))
             r["notes"] = "Crop from the yield: none named, and over 100 bpa is corn."
-        if all_silage:              # "YIELD: NC IA silage numbers"
-            r["is_silage"] = True
-        r["dedup_hash"] = dedup_hash(crop_year, r["crop"], r["state"], r["location"],
-                                     r["raw_text"])
-        r["report_source"] = "email"
-        r["source_file"] = None
-        r["date_reported"] = date_reported
-        r["email_subject"] = (subject or "").strip() or None
-    return rows
+        for x in by_practice(r):    # dryland and irrigated figures: a row each
+            if all_silage:          # "YIELD: NC IA silage numbers"
+                x["is_silage"] = True
+            x["dedup_hash"] = row_hash(x)
+            x["report_source"] = "email"
+            x["source_file"] = None
+            x["date_reported"] = date_reported
+            x["email_subject"] = (subject or "").strip() or None
+            out.append(x)
+    return out
 
 
 # --- forwards -----------------------------------------------------------------

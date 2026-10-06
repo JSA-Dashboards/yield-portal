@@ -18,7 +18,8 @@ STATES = sorted(P.ABBRS)
 EDIT_COLS = ["crop_year", "date_reported", "crop", "state", "location", "yield_bpa",
              "yield_min", "yield_max", "ly_yield", "expected_yield", "aph", "maturity",
              "irrigation", "disease", "is_silage", "is_record", "raw_text", "notes"]
-SHORT = {"incomplete": "Needs crop/state", "split": "Two crops", "duplicate": "Possible duplicate", "corn?": "Probably corn",
+SHORT = {"incomplete": "Needs crop/state", "split": "Two crops", "practice": "Dryland + irrigated",
+         "duplicate": "Possible duplicate", "corn?": "Probably corn",
          "reread": "Parser reads it differently", "range": "Out of range"}
 STATUS = {"clean": "", "flagged": "Needs review", "approved": "Approved", "excluded": "Excluded"}
 
@@ -91,13 +92,21 @@ def _approve(r, clear, note):
 
 def _fix(r, note):
     """Apply a report's suggested fix. A split makes one report per crop (each
-    with its own sentences and figures) and marks the original superseded;
-    any other fix is written over the report, which is then approved."""
+    with its own sentences and figures), a practice split one per practice
+    (each with the whole text and its own figures), and either marks the
+    original superseded; any other fix is written over the report, which is
+    then approved."""
     if "split" in (r["suggestion"] or {}):
         kids = checks.split_rows(r)
         db.insert_new(kids)
         db.set_decision(r["dedup_hash"], "superseded", ["split"],
                         "split by crop into " + ", ".join(k["dedup_hash"] for k in kids), _who())
+    elif "practice" in (r["suggestion"] or {}):
+        kids = checks.practice_rows(r)
+        db.insert_new(kids)
+        db.set_decision(r["dedup_hash"], "superseded", ["practice"],
+                        "split by practice into " + ", ".join(k["dedup_hash"] for k in kids),
+                        _who())
     else:
         db.update_row(r["dedup_hash"], r["suggestion"])
         _approve(r, r["review_flags"], note)
@@ -191,11 +200,12 @@ if mode == "queue":
 
     fixable = queue[queue["suggestion"].notna()
                     & queue["review_flags"].map(
-                        lambda f: set(f) <= {"corn?", "reread", "incomplete"})]
+                        lambda f: set(f) <= {"corn?", "reread", "incomplete", "practice"})]
     if len(fixable):
         with st.expander(f"Apply all {len(fixable)} suggested fixes in this list"):
             st.caption("Only reports whose every flag comes with a fix (probably corn, parser "
-                       "re-reads, no crop named but a corn-sized yield). Each gets its fix. "
+                       "re-reads, no crop named but a corn-sized yield, dryland and irrigated "
+                       "figures to split). Each gets its fix. "
                        "Look the list over first. Two-crop splits aren't included: some read "
                        "a rotation note or a second report as the other crop, so each one "
                        "gets a look.")
@@ -251,6 +261,8 @@ if mode == "queue":
             st.markdown(f"**Suggested fix:** {checks.describe_fix(r['suggestion'])}")
             for crop, text in (r["suggestion"].get("split") or {}).items():
                 st.markdown(f"> **{crop}:** " + RT.md_escape(text))
+            for practice, text in (r["suggestion"].get("practice") or {}).items():
+                st.markdown(f"> **{practice}:** " + RT.md_escape(text))
 
         with st.container(horizontal=True):
             if r["suggestion"]:

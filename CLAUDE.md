@@ -97,6 +97,7 @@ came in by, and never changes a report — it raises flags:
 |---|---|---|
 | `incomplete` | no crop or no state (an email nobody could place) | crop → Corn when the state is known and the yield is over 100 bpa (new emails get that at parse time); else set by hand |
 | `split` | yields for both corn and soybeans in one report (`parse_pdfs.split_by_crop`) | one report per crop; the original is marked `superseded` |
+| `practice` | yields for both dryland and irrigated ground in one stored report that names no single practice (`split_by_practice`) | one report per practice (`checks.practice_rows`); the original is `superseded`; in the bulk fix |
 | `range` | corn outside 50–300 bpa, soybeans under 10 | — |
 | `corn?` | soybeans over 100 bpa (corn filed under the soybean header) | crop → Corn |
 | `reread` | today's parser reads a different yield or LY from the stored text | the fresh reading |
@@ -110,8 +111,24 @@ report run into the line as the other crop. Several fields of one crop stay one
 report (a chatty farm shouldn't count five times): the first figure is the
 yield, unless the report states a whole-farm/overall average, which then leads
 (`FARM_AVG_RE`, skipped when another place is named in between). The text-only
-checks (re-read, split) are computed once with the cached reports
+checks (re-read, split, practice) are computed once with the cached reports
 (`checks.row_checks`), so a decision doesn't re-parse 1,300 reports.
+
+**Dryland and irrigated: a report each, both counted** (Kolten, 2026-10-05: about
+half the reports are keyed in by JSA, half come from Garrett, and both carry these).
+`split_by_practice` gives each figure to the practice named last before it
+("dryland has averaged 150-200 bpa while irrigated 205-250"); no split when a figure
+comes before either practice, when either has no figure of its own, or when the
+report also gives both crops (the crop split goes first, then each half can split).
+The two rows keep the **same full text**: each reads its own figures
+(`extract_metrics(text, crop, practice)`, also how `reread` re-reads a half), its
+hash adds the practice (`dedup_hash(..., practice)` / `row_hash`), the duplicate
+check never pairs different practices, and `report_text.ordered` shows the shared
+words once. New reports split at parse time (`by_practice`, in `parse_lines` and
+`parse_email`); on **Add reports → Enter by hand**, leaving Yield and Irrigation
+empty saves one report per practice, keyed-in fields kept. Practice words only
+("dryland", "non-irrigated", "irrigated"; "non- irrigated" wrapped by a PDF), not
+"pivot", which can mark dryland corners.
 
 A person decides on **Review & edit → Needs review**: apply the fix, approve as it
 is, keep both (duplicates), exclude, or edit by hand. Decisions live in
@@ -305,7 +322,8 @@ made-up reports in the shapes the real ones take, plus the real-data file when
 present. Rules the cases pin down: a "last year" never
 attaches across a full stop or past another number; "above/better than last
 year" is a comparison, not last year's figure; "less/more than" is always a
-difference; a small number before "better/less than" is a difference; "expected
+difference; a small number before "better/less than" or "behind/ahead (of) last
+year" is a difference ("10bpa behind last year" is no LY of 10); "expected
 N" and "thought it was / would be N" make N the expectation, but "better than
 expected N" or "than we thought N" make N the yield; "vs N target/budget" is the
 expectation; a

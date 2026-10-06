@@ -16,6 +16,8 @@ CHECKS = {
     "incomplete": "The email didn't say which crop or state: set them by hand "
                   "(corn is suggested when the yield is over 100 bpa)",
     "split": "Gives yields for both corn and soybeans: one report per crop is suggested",
+    "practice": "Gives yields for both dryland and irrigated ground: one report per practice "
+                "is suggested, each with the whole text and its own figures",
     "range": "Yield outside the usual range (corn 50–300 bpa, soybeans 10–100)",
     "corn?": "A soybean yield over 100 bpa, so probably a corn report",
     "reread": "The parser now reads a different figure from this report",
@@ -39,10 +41,17 @@ def _same(a, b):
     return abs(float(a) - float(b)) < 1e-9
 
 
+def _practice(row):
+    """The row's practice when it's one ('Irrigated' / 'Non-irrigated'), so half
+    of a report split by practice is re-read on its own figures."""
+    v = row.get("irrigation")
+    return v if v in P.PRACTICES else None
+
+
 def reread(row) -> dict:
     """{field: value} the current parser reads differently from what's stored,
     or {} when neither the yield nor last year's yield would change."""
-    m = P.extract_metrics(row["raw_text"] or "", row["crop"])
+    m = P.extract_metrics(row["raw_text"] or "", row["crop"], _practice(row))
     changed = {f: m[f] for f in REREAD_FIELDS if not _same(row[f], m[f])}
     return changed if any(f in changed for f in _REREAD_FLAGS_ON) else {}
 
@@ -55,6 +64,7 @@ def row_checks(df: pd.DataFrame) -> pd.DataFrame:
     recs = out.to_dict("records")
     out["_reread"] = [reread(r) for r in recs]
     out["_split"] = [P.split_by_crop(r["raw_text"] or "", r["crop"]) for r in recs]
+    out["_practice"] = [P.split_by_practice(r["raw_text"] or "") for r in recs]
     return out
 
 
@@ -72,6 +82,22 @@ def split_rows(r) -> list:
                      dedup_hash=P.dedup_hash(r["crop_year"], crop, r["state"], r["location"], text))
         out.append(child)
     return out
+
+
+def practice_rows(r) -> list:
+    """The reports a 'practice' suggestion makes: one per practice, each the whole
+    report with its own practice's figures and irrigation, carrying the
+    original's place, crop, source, date, email and notes. A maturity or
+    disease a person keyed in stays when the text doesn't give one."""
+    base = {k: r.get(k) for k in ("crop_year", "crop", "state", "location", "raw_text",
+                                  "report_source", "source_file", "date_reported",
+                                  "email_subject", "email_id", "notes")}
+    kids = P.by_practice(base)
+    for k in kids:
+        for f in ("maturity", "disease"):
+            if _missing(k.get(f)) and not _missing(r.get(f)):
+                k[f] = r[f]
+    return kids
 
 
 def _place_key(loc) -> str:
@@ -107,6 +133,14 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
             flags[i].append("split")
             suggestion[i] = {"split": parts}
             continue
+        # dryland and irrigated figures in one report, not yet split (a row that
+        # names one practice is a half already, or a person's choice)
+        by_practice = (r["_practice"] if "_practice" in r
+                       else P.split_by_practice(r["raw_text"] or ""))
+        if by_practice and _practice(r) is None:
+            flags[i].append("practice")
+            suggestion[i] = {"practice": by_practice}
+            continue
         fix = {}
         y = r["yield_bpa"]
         if not _missing(y):
@@ -133,10 +167,15 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
     pos = {idx: i for i, idx in enumerate(out.index)}
     for members in groups.values():
         if len(members) > 1:
-            hashes = out.loc[members, "dedup_hash"].tolist()
-            for idx, h in zip(members, hashes):
-                flags[pos[idx]].append("duplicate")
-                dup_of[pos[idx]] = [o for o in hashes if o != h]
+            hashes = dict(zip(members, out.loc[members, "dedup_hash"]))
+            practice = {idx: _practice(out.loc[idx]) for idx in members}
+            for idx in members:
+                # dryland and irrigated halves of one place's harvest aren't one report
+                twins = [hashes[o] for o in members if o != idx
+                         and not (practice[idx] and practice[o] and practice[idx] != practice[o])]
+                if twins:
+                    flags[pos[idx]].append("duplicate")
+                    dup_of[pos[idx]] = twins
 
     status, approved_flags = [], []
     for f, d in zip(flags, decided):
@@ -165,6 +204,10 @@ def describe_fix(fix: dict) -> str:
         return "split into " + " + ".join(
             f"{crop} {P.extract_metrics(text, crop)['yield_bpa']:g} bpa"
             for crop, text in fix["split"].items())
+    if fix and "practice" in fix:
+        return "split by practice: " + " + ".join(
+            f"{'dryland' if p == 'Non-irrigated' else 'irrigated'} "
+            f"{P.extract_yields(fix['practice'][p])[0][0]:g} bpa" for p in P.PRACTICES)
     names = {"crop": "crop", "yield_bpa": "yield", "yield_min": "low", "yield_max": "high",
              "ly_yield": "last year", "expected_yield": "expected"}
     parts = []

@@ -63,6 +63,31 @@ check("county opens the body", (rows[0]["location"], rows[0]["state"]), ("Lauder
 check("dryland -> Non-irrigated", rows[0]["irrigation"], "Non-irrigated")
 check("'68.25 bushels'", rows[0]["yield_bpa"], 68.25)
 
+# dryland and irrigated figures in one report: a row each, the same words in both
+rows = email("YIELD: Polk Co NE corn",
+             "Polk Co, NE: Half done, dryland running 160-190 bpa while irrigated 220-240 bpa. "
+             "Rust in the area. Thinks they'll be 8 bpa behind last year.")
+check("two practices -> two rows", [(r["irrigation"], r["yield_bpa"], r["yield_min"], r["yield_max"])
+                                    for r in rows],
+      [("Non-irrigated", 160, 160, 190), ("Irrigated", 220, 220, 240)])
+check("...one text, two hashes", (rows[0]["raw_text"] == rows[1]["raw_text"],
+                                  rows[0]["dedup_hash"] != rows[1]["dedup_hash"]), (True, True))
+check("'8 bpa behind last year' is a difference, not last year's yield",
+      [r["ly_yield"] for r in rows], [None, None])
+check("'non- irrigated' (a PDF line wrapped after the hyphen) is non-irrigated",
+      P.extract_irrigation("whole farm non- irrigated average of 44"), "Non-irrigated")
+rows = email("YIELD: Hall Co NE beans",
+             "Hall Co, NE: Irrigated beans did 72 bpa. Dryland beans 51 bpa.")
+check("irrigated first: still a row each", sorted((r["irrigation"], r["yield_bpa"]) for r in rows),
+      [("Irrigated", 72), ("Non-irrigated", 51)])
+for label, body in (
+        ("a figure before either practice is named", "Hall Co, NE: 210 bpa; dryland 180, irrigated 240."),
+        ("only last year for one practice", "Hall Co, NE: dryland 180 bpa. Irrigated was 230 last year."),
+        ("'irrigated yields' is a figure of speech", "Hall Co, NE: irrigated yields on dryland ground, 200 bpa."),
+        ("both crops: the two-crop split goes first",
+         "Hall Co, NE: dryland corn 170 bpa, irrigated corn 230 bpa. Dryland beans 55 bpa.")):
+    check(f"no practice split: {label}", len(email("YIELD: Hall Co NE", body)), 1)
+
 rows = email("YIELD: NC IA silage numbers",
              "Silage numbers NC IA:\nMitchell Co IA 248\nHoward Co IA 215\nHoward Co IA 236\n"
              "A lot running from 215 to 245")
