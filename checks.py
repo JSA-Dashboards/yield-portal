@@ -41,6 +41,29 @@ def _same(a, b):
     return abs(float(a) - float(b)) < 1e-9
 
 
+def _equal(a, b):
+    """_same for any stored value: numbers, flags and words."""
+    if isinstance(a, str) or isinstance(b, str):
+        return (None if _missing(a) else a) == (None if _missing(b) else b)
+    return _same(a, b)
+
+
+# What a stored row that already is one of a report's entries takes from that entry
+# as read today: an irrigated half split before entries read their own figures can
+# carry the report's first APH instead of its own.
+ENTRY_FIELDS = ["yield_min", "yield_max", "ly_yield", "expected_yield", "aph",
+                "irrigation", "is_silage", "is_record"]
+
+
+def entry_changes(entry: dict, stored: dict) -> dict:
+    """{field: value} where a stored entry row differs from its entry's reading.
+    Only when the yields agree: a row whose yield differs was read or corrected
+    otherwise, and stays as it is."""
+    if not _same(entry.get("yield_bpa"), stored.get("yield_bpa")):
+        return {}
+    return {f: entry.get(f) for f in ENTRY_FIELDS if not _equal(entry.get(f), stored.get(f))}
+
+
 def _practice(row):
     """The row's practice when it's one ('Irrigated' / 'Non-irrigated')."""
     v = row.get("irrigation")
@@ -105,9 +128,11 @@ def entry_rows(r) -> list:
     report with its own entry's figures and practice, carrying the original's
     place, crop, source, date, email and notes. A maturity or disease a person
     keyed in stays when the text doesn't give one."""
-    base = {k: r.get(k) for k in ("crop_year", "crop", "state", "location", "raw_text",
-                                  "report_source", "source_file", "date_reported",
-                                  "email_subject", "email_id", "notes")}
+    # None, not NaN, for a blank field: the hashes must be the ones the parser makes
+    # ("None" in the key), or a re-read of the same email would add the entries again
+    base = {k: None if _missing(r.get(k)) else r.get(k)
+            for k in ("crop_year", "crop", "state", "location", "raw_text", "report_source",
+                      "source_file", "date_reported", "email_subject", "email_id", "notes")}
     kids = P.by_entry(base)
     for k in kids:
         for f in ("maturity", "disease"):
@@ -141,8 +166,10 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
     for i, k in enumerate(ident):
         if not gone[i]:
             siblings.setdefault(k, []).append(out["dedup_hash"].iloc[i])
+    records = out.to_dict("records")
+    by_hash = {r["dedup_hash"]: r for r in records}
 
-    for i, r in enumerate(out.to_dict("records")):
+    for i, r in enumerate(records):
         if gone[i]:
             continue
         if r["crop"] not in ("Corn", "Soybeans") or _missing(r["state"]) or not r["state"]:
@@ -158,14 +185,22 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
             suggestion[i] = {"split": parts}
             continue
         # several fields, or dryland and irrigated, in one report that hasn't
-        # become as many rows yet (Madison Co's dryland half held two fields)
+        # become as many rows yet (a dryland half split earlier can hold two fields)
         entries, mine = _entries(r), siblings.get(ident[i], [])
         if entries and len(entries) > len(mine):
             texts = [t for _, t in P.split_entries(r["raw_text"] or "")[1]]
             flags[i].append("entries")
+            # a row that already is one of the entries stays, with its entry's figures
+            updates = {}
+            for part, m in entries:
+                h = P.dedup_hash(*(None if _missing(r[k]) else r[k] for k in
+                                   ("crop_year", "crop", "state", "location")),
+                                 r["raw_text"] or "", part)
+                if h in mine and (ch := entry_changes(m, by_hash[h])):
+                    updates[h] = ch
             suggestion[i] = {"entries": [[part, m["irrigation"], m["yield_bpa"], t]
                                          for (part, m), t in zip(entries, texts)],
-                             "siblings": mine}
+                             "siblings": mine, "updates": updates}
             continue
         fix = {}
         y = r["yield_bpa"]

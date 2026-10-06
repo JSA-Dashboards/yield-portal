@@ -126,9 +126,15 @@ else opens the next entry; the last closes the last. An entry's practice is the 
 names, else the one before. **No split** when a figure comes before the first cut,
 when a whole-farm/overall average is stated (it speaks for the report, `FARM_AVG_RE`),
 when another place is named among the entries (a county word, a state abbreviation or
-a state in full: PDF lines that run several reports together), when an acreage follows
-"last year" ("last year our 100 acre field made 80" is LY), or when the report also
-gives both crops (the crop split goes first, then each half can split).
+a state in full: PDF lines that run several reports together; also a state in full
+after the report's own place, before the entries: "Town, MN ... NE Iowa beans 100
+acres 50 bushel", left whole), when "last year" opens the clause an acreage is in
+("last year our 100 acre field made 80" is LY; but "220 bpa vs 190 bpa last year 150
+acres made 230" is the next field, `_ly_field`), or when the report also gives both
+crops (the crop split goes first, then each half can split). Giving a report's
+crop-less opening sentences to the crop it's filed under (so "40 acres made 230 bpa
+... Early beans running 70 bpa" splits by crop) was tried and dropped: it split 3 of
+4 stored reports wrongly (a bean report saying its field was corn last year).
 
 The rows keep the **same full text**; each reads its own figures from its entry
 (`entry_metrics`: APH and maturity fall back to the lead, silage is the lead's or the
@@ -137,10 +143,14 @@ part)`, carried as `_part` before insert, never stored): a practice with one ent
 just the practice ("Irrigated", as the 2026-10-05 practice split hashed it), several
 are numbered ("Non-irrigated|2", "entry|1"). `reread` reads a row as the entry with its
 practice and yield; the duplicate check never pairs rows of one text, nor different
-practices; `report_text.ordered` shows the shared words once. New reports split at
+practices; `report_text.ordered` shows the shared words once. The fix keeps a stored
+row that already is an entry and gives it its entry's figures when the yields agree
+(`checks.entry_changes`, the suggestion's `updates`: an irrigated half split on
+2026-10-05 had the report's first APH, not its own). Entry hashes use None for a blank field,
+as the parser does (`dedup_hash` puts "None" in the key; pandas has NaN). New reports split at
 parse time (`by_entry`, in `parse_lines` and `parse_email`); on **Add reports → Enter
 by hand**, leaving Yield and Irrigation empty saves one report per entry, keyed-in
-fields kept. 76 PDF reports split this way (1,271 rows → 1,391).
+fields kept. 78 PDF reports split this way (1,271 rows → 1,394).
 
 A person decides on **Review & edit → Needs review**: apply the fix, approve as it
 is, keep both (duplicates), exclude, or edit by hand. Decisions live in
@@ -343,6 +353,14 @@ expectation; a
 to the next figure; "N bu higher YoY" / "N bu difference" is a change at any size;
 a date ("planted 4/12 – 241") or road ("Hwy 30- 66") is never the low end of a
 range; "160 A" is acres; same place with a different yield is a different report.
+The APH is never a yield, nor part of the range, before or after its figure ("APH
+was 45 bpa", "vs 60 bpa APH", "vs. 58.5bpa APH"); a figure before "APH" is the APH
+unless "APH" names its own ("90 acres 228 bpa aph 205" is APH 205; "(205 APH) 2. 150
+acres" is still 205). A yield check is the expectation ("vs a mid-Aug yield check at
+215", "field checked in July at 230bpa"). Before 2026-10-06 the range took the APH
+("200 bpa vs 185 bpa APH" read as 185–200) and a field APH stated after the yield could
+be read as the yield; stored ranges weren't rewritten, `reread` only flags a changed
+yield or last year.
 PDF lines opening "Place Co, ST ..." or "Town, ST ..." (comma, no separator) start
 a report; "Polk Co – ..." with no state starts one in the previous report's state.
 
