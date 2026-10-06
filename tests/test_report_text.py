@@ -77,6 +77,13 @@ check("place order", list(RT.ordered(df, by="place")["location"]),
       ["Adams Co", "Brown Co", "Clark Co", "Story Co", "Polk Co"])
 check("sections", [(c, [n for n, _ in s]) for c, s in RT.sections(RT.ordered(df))],
       [("Corn", ["Illinois", "Iowa"]), ("Soybeans", ["Iowa"])])
+halves = pd.DataFrame([
+    dict(crop="Corn", state="NE", location="Saline Co", date_reported=dt.date(2026, 10, 5),
+         raw_text="Dryland 150 bpa while irrigated 215 bpa.", irrigation=p) for p in
+    ("Non-irrigated", "Irrigated")])
+check("a report split by practice shows its words once", len(RT.ordered(halves)), 1)
+check("...while different reports at one place both show",
+      len(RT.ordered(pd.concat([halves, df.assign(location="Saline Co", state="NE")]))), 6)
 
 table = RT.md_table(RT.ordered(df)[lambda d: d["state"] == "IL"], query="bpa")
 check("table: header + one line per report", table.count("\n") + 1, 2 + 3)

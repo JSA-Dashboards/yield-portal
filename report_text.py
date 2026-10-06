@@ -56,7 +56,8 @@ def label_and_body(raw, location, state):
 
 def ordered(df: pd.DataFrame, by: str = "date") -> pd.DataFrame:
     """Corn before soybeans, states by name, then by report date (undated after,
-    by place) — the PDF's order — or by place."""
+    by place) — the PDF's order — or by place. A report split by practice is two
+    rows with one text (dryland and irrigated): its words show once."""
     keys = pd.DataFrame({
         "_crop": df["crop"].map(CROP_ORDER).fillna(len(CROP_ORDER)),
         "_state": df["state"].map(state_name),
@@ -64,7 +65,8 @@ def ordered(df: pd.DataFrame, by: str = "date") -> pd.DataFrame:
         "_place": df["location"].fillna("").str.lower(),
     }, index=df.index)
     cols = ["_crop", "_state"] + (["_place", "_date"] if by == "place" else ["_date", "_place"])
-    return df.loc[keys.sort_values(cols, na_position="last", kind="stable").index]
+    out = df.loc[keys.sort_values(cols, na_position="last", kind="stable").index]
+    return out[~out[["crop", "state", "location", "raw_text"]].astype(str).duplicated().values]
 
 
 def sections(df: pd.DataFrame):

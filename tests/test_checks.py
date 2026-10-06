@@ -120,6 +120,36 @@ pre = checks.row_checks(pd.DataFrame([both]))
 check("row checks computed ahead give the same result",
       checks.run(pre, {}).loc[0, "suggestion"], one.loc[0, "suggestion"])
 
+# dryland and irrigated figures stored as one report (keyed in by hand, or loaded before
+# the parser split them): flagged, and the fix makes a report per practice
+mixed_text = "Half done, dryland 150-190 bpa while irrigated 215-240 bpa. Tar spot bad."
+mixed = row(mixed_text, state="NE", location="Saline Co", yield_bpa=None, yield_min=None,
+            yield_max=None, irrigation=None, maturity="112", notes="by phone")
+mo = checks.run(pd.DataFrame([mixed]), {})
+check("dryland + irrigated: flagged 'practice'", mo.loc[0, "review_flags"], ["practice"])
+check("...described with each practice's yield", checks.describe_fix(mo.loc[0, "suggestion"]),
+      "split by practice: dryland 150 bpa + irrigated 215 bpa")
+halves = checks.practice_rows(mo.iloc[0].to_dict())
+check("the fix makes a dryland and an irrigated report",
+      [(h["irrigation"], h["yield_bpa"], h["yield_max"]) for h in halves],
+      [("Non-irrigated", 150, 190), ("Irrigated", 215, 240)])
+check("...each the whole text, with its own hash, the keyed-in maturity and the notes",
+      ({h["raw_text"] for h in halves} == {mixed_text},
+       len({h["dedup_hash"] for h in halves} | {mixed["dedup_hash"]}),
+       {h["maturity"] for h in halves}, {h["notes"] for h in halves}),
+      (True, 3, {"112"}, {"by phone"}))
+ho = checks.run(pd.DataFrame(halves), {})
+check("the halves raise nothing: each is re-read on its own figures",
+      ho["review_flags"].tolist(), [[], []])
+same = checks.practice_rows(row("Dryland made 200 bpa and irrigated 200 bpa too.", state="NE",
+                                 location="Saline Co", irrigation=None))
+check("halves with the same figure aren't each other's duplicate",
+      checks.run(pd.DataFrame(same), {})["review_flags"].tolist(), [[], []])
+check("a row a person set to one practice isn't flagged",
+      checks.run(pd.DataFrame([dict(mixed, irrigation="Irrigated", yield_bpa=215.0,
+                                    yield_min=215.0, yield_max=240.0)]), {})
+      .loc[0, "review_flags"], [])
+
 if failures:
     print(f"{len(failures)} FAILED:")
     for f in failures:

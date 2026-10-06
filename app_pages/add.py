@@ -158,8 +158,7 @@ if mode == "Paste an email":
                 for c in PREVIEW_COLS:
                     r[c] = _val(e[c])
                 r["is_silage"] = bool(r["is_silage"])
-                r["dedup_hash"] = P.dedup_hash(r["crop_year"], r["crop"], r["state"],
-                                               r["location"], r["raw_text"] or "")
+                r["dedup_hash"] = P.row_hash(r)    # with its practice, if half of a split
                 r.update(report_source=REPORT_SOURCE or "email", date_reported=meta["date"],
                          email_subject=meta["subject"])
                 if plot:
@@ -249,7 +248,10 @@ else:
         state = c4.selectbox("State", STATES, index=None, placeholder="Choose")
         location = c5.text_input("Location", placeholder="Morgan Co")
         c6, c7, c8, c9 = st.columns(4)
-        yld = c6.number_input("Yield (bpa)", min_value=0.0, max_value=400.0, value=None)
+        yld = c6.number_input("Yield (bpa)", min_value=0.0, max_value=400.0, value=None,
+                              help="Dryland and irrigated figures in one report? Leave Yield and "
+                                   "Irrigation empty: it's saved as one report per practice, "
+                                   "each with its figures from the text.")
         ly = c7.number_input("Last year (bpa)", min_value=0.0, max_value=400.0, value=None)
         aph = c8.number_input("APH", min_value=0.0, max_value=400.0, value=None)
         maturity = c9.text_input("Maturity", placeholder="110 or 2.6")
@@ -275,11 +277,30 @@ else:
                    "report_source": REPORT_SOURCE or "manual"}
             row["dedup_hash"] = P.dedup_hash(row["crop_year"], crop, state,
                                              row["location"], raw)
-            _, twin, _ = data.find_match(data.load_all(), row)
+            rows = [row]
+            halves = (P.by_practice(dict(row, irrigation=None))
+                      if yld is None and irrigation in (None, "Mixed") else [])
+            if len(halves) > 1:
+                # dryland and irrigated figures: one report per practice, read from the
+                # text; what was keyed in still wins
+                keyed = {"ly_yield": ly, "aph": aph, "maturity": row["maturity"],
+                         "disease": row["disease"]}
+                for k in halves:
+                    k.update({f: v for f, v in keyed.items() if v is not None})
+                    k["is_silage"] = k["is_silage"] or is_silage
+                    k["is_record"] = k["is_record"] or is_record
+                rows = halves
+            _, twin, _ = data.find_match(data.load_all(), rows[0])
             twin_text = data.describe(data.load_all(), twin) if twin else ""
-            inserted, _ = db.insert_new([row])
+            inserted, _ = db.insert_new(rows)
             data.invalidate()
-            if not inserted:
+            if len(rows) > 1 and inserted:
+                st.success("Saved as one report per practice: " + "; ".join(
+                    f"{'dryland' if k['irrigation'] == 'Non-irrigated' else 'irrigated'} "
+                    + (f"{k['yield_min']:g}–{k['yield_max']:g}" if k["yield_max"] != k["yield_min"]
+                       else f"{k['yield_bpa']:g}") + " bpa" for k in rows) + ".",
+                    icon=":material/call_split:")
+            elif not inserted:
                 st.warning("That exact report is already in the archive — nothing added.")
             elif twin:
                 st.success("Report saved.", icon=":material/check_circle:")
