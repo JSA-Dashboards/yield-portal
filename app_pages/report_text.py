@@ -10,8 +10,7 @@ VIEW_ONLY = st.session_state.get("view_only", False)
 
 st.title("Report text")
 st.caption("Every report in its own words, laid out like the yield PDF: crop, then state, "
-           "with the date it was reported. Ag Trader Talk's reports, JSA's own (tagged JSA), "
-           "and seed plots customers shared (tagged with the company).")
+           "with the date it was reported.")
 
 try:
     df = data.load_all()
@@ -83,8 +82,7 @@ elif n_dated < len(f):
 def _subtitle():
     """What the download holds, in words: the filters applied and when it was made."""
     today = dt.date.today()
-    parts = ["County field reports from Ag Trader Talk and JSA",
-             " and ".join(c for c in data.CROPS if c in crops)]
+    parts = [" and ".join(c for c in data.CROPS if c in crops)]
     if states:
         names = sorted(RT.state_name(s) for s in states)
         parts.append(", ".join(names[:4]) + (f" +{len(names) - 4} more" if len(names) > 4 else ""))

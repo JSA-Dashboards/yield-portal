@@ -304,9 +304,9 @@ def build(today: dt.date):
         f"Weekly yield reports · {year} harvest</div>"
         f'<div style="font-size:12px;color:#cfd4da;margin-top:2px">{stamp}</div></td></tr>'
         '<tr><td style="padding:14px 18px 6px 18px">'
-        f'<p style="margin:0 0 12px 0;font-size:13px;color:{GRAY}">County field reports from '
-        "Ag Trader Talk and JSA (JSA's own are tagged JSA). Seed plots customers shared appear "
-        "in the report text, tagged with the company, and stay out of the tiles and charts.</p>"
+        f'<p style="margin:0 0 12px 0;font-size:13px;color:{GRAY}">Seed plots customers shared '
+        "appear in the report text, tagged with the company, and stay out of the tiles and "
+        "charts.</p>"
         + new_box(new, lo, hi) + "".join(parts)
         + f'<h2 style="font-family:{FONT};font-size:17px;color:{BLUE};margin:26px 0 0 0">'
         f"Report text · {year}</h2>"
