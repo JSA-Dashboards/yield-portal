@@ -16,8 +16,8 @@ CHECKS = {
     "incomplete": "The email didn't say which crop or state: set them by hand "
                   "(corn is suggested when the yield is over 100 bpa)",
     "split": "Gives yields for both corn and soybeans: one report per crop is suggested",
-    "practice": "Gives yields for both dryland and irrigated ground: one report per practice "
-                "is suggested, each with the whole text and its own figures",
+    "entries": "Gives yields for several fields, or for dryland and irrigated ground: one "
+               "report per entry is suggested, each with the whole text and its own figures",
     "range": "Yield outside the usual range (corn 50–300 bpa, soybeans 10–100)",
     "corn?": "A soybean yield over 100 bpa, so probably a corn report",
     "reread": "The parser now reads a different figure from this report",
@@ -42,29 +42,45 @@ def _same(a, b):
 
 
 def _practice(row):
-    """The row's practice when it's one ('Irrigated' / 'Non-irrigated'), so half
-    of a report split by practice is re-read on its own figures."""
+    """The row's practice when it's one ('Irrigated' / 'Non-irrigated')."""
     v = row.get("irrigation")
     return v if v in P.PRACTICES else None
 
 
-def reread(row) -> dict:
+def _entries(row):
+    """P.entries_of for a row: computed ahead by row_checks, else here."""
+    return row["_entries"] if "_entries" in row else P.entries_of(row["raw_text"] or "", row["crop"])
+
+
+def reread(row, entries=None) -> dict:
     """{field: value} the current parser reads differently from what's stored,
-    or {} when neither the yield nor last year's yield would change."""
-    m = P.extract_metrics(row["raw_text"] or "", row["crop"], _practice(row))
+    or {} when neither the yield nor last year's yield would change. A report
+    split by field or practice is read as the entry this row is (its practice
+    and yield); a row that matches no entry is a report not split yet, which the
+    'entries' check covers."""
+    entries = _entries(row) if entries is None else entries
+    if entries:
+        m = next((m for _, m in entries if _same(m["yield_bpa"], row["yield_bpa"])
+                  and _practice(row) in (None, m["irrigation"])), None)
+        if m is None:
+            return {}
+    else:
+        m = P.extract_metrics(row["raw_text"] or "", row["crop"])
     changed = {f: m[f] for f in REREAD_FIELDS if not _same(row[f], m[f])}
     return changed if any(f in changed for f in _REREAD_FLAGS_ON) else {}
 
 
 def row_checks(df: pd.DataFrame) -> pd.DataFrame:
-    """The checks that depend on a report's own text alone (the re-read and the
-    two-crop split), computed once with the cached reports so a review decision
-    doesn't re-parse every report. run() computes them itself when they're absent."""
+    """The checks that depend on a report's own text alone (the re-read, the
+    two-crop split, the entries), computed once with the cached reports so a
+    review decision doesn't re-parse every report. run() computes them itself
+    when they're absent."""
     out = df.copy()
     recs = out.to_dict("records")
-    out["_reread"] = [reread(r) for r in recs]
+    entries = [P.entries_of(r["raw_text"] or "", r["crop"]) for r in recs]
+    out["_entries"] = entries
+    out["_reread"] = [reread(r, e) for r, e in zip(recs, entries)]
     out["_split"] = [P.split_by_crop(r["raw_text"] or "", r["crop"]) for r in recs]
-    out["_practice"] = [P.split_by_practice(r["raw_text"] or "") for r in recs]
     return out
 
 
@@ -84,15 +100,15 @@ def split_rows(r) -> list:
     return out
 
 
-def practice_rows(r) -> list:
-    """The reports a 'practice' suggestion makes: one per practice, each the whole
-    report with its own practice's figures and irrigation, carrying the
-    original's place, crop, source, date, email and notes. A maturity or
-    disease a person keyed in stays when the text doesn't give one."""
+def entry_rows(r) -> list:
+    """The reports an 'entries' suggestion makes: one per entry, each the whole
+    report with its own entry's figures and practice, carrying the original's
+    place, crop, source, date, email and notes. A maturity or disease a person
+    keyed in stays when the text doesn't give one."""
     base = {k: r.get(k) for k in ("crop_year", "crop", "state", "location", "raw_text",
                                   "report_source", "source_file", "date_reported",
                                   "email_subject", "email_id", "notes")}
-    kids = P.by_practice(base)
+    kids = P.by_entry(base)
     for k in kids:
         for f in ("maturity", "disease"):
             if _missing(k.get(f)) and not _missing(r.get(f)):
@@ -117,6 +133,14 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
     dup_of = [[] for _ in range(n)]
     decided = [decisions.get(h) or {} for h in out["dedup_hash"]]
     gone = [d.get("decision") in ("superseded", "excluded") for d in decided]
+    # the live rows each report's text has become (the entries of a split report
+    # share its text)
+    ident = list(zip(out["crop_year"], out["crop"], out["state"], out["location"].astype(str),
+                     out["raw_text"].astype(str)))
+    siblings = {}
+    for i, k in enumerate(ident):
+        if not gone[i]:
+            siblings.setdefault(k, []).append(out["dedup_hash"].iloc[i])
 
     for i, r in enumerate(out.to_dict("records")):
         if gone[i]:
@@ -133,13 +157,15 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
             flags[i].append("split")
             suggestion[i] = {"split": parts}
             continue
-        # dryland and irrigated figures in one report, not yet split (a row that
-        # names one practice is a half already, or a person's choice)
-        by_practice = (r["_practice"] if "_practice" in r
-                       else P.split_by_practice(r["raw_text"] or ""))
-        if by_practice and _practice(r) is None:
-            flags[i].append("practice")
-            suggestion[i] = {"practice": by_practice}
+        # several fields, or dryland and irrigated, in one report that hasn't
+        # become as many rows yet (Madison Co's dryland half held two fields)
+        entries, mine = _entries(r), siblings.get(ident[i], [])
+        if entries and len(entries) > len(mine):
+            texts = [t for _, t in P.split_entries(r["raw_text"] or "")[1]]
+            flags[i].append("entries")
+            suggestion[i] = {"entries": [[part, m["irrigation"], m["yield_bpa"], t]
+                                         for (part, m), t in zip(entries, texts)],
+                             "siblings": mine}
             continue
         fix = {}
         y = r["yield_bpa"]
@@ -169,9 +195,11 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
         if len(members) > 1:
             hashes = dict(zip(members, out.loc[members, "dedup_hash"]))
             practice = {idx: _practice(out.loc[idx]) for idx in members}
+            text = {idx: out.at[idx, "raw_text"] for idx in members}
             for idx in members:
-                # dryland and irrigated halves of one place's harvest aren't one report
-                twins = [hashes[o] for o in members if o != idx
+                # entries of one report (one text) aren't each other's duplicate, nor
+                # are dryland and irrigated reports of one place's harvest
+                twins = [hashes[o] for o in members if o != idx and text[o] != text[idx]
                          and not (practice[idx] and practice[o] and practice[idx] != practice[o])]
                 if twins:
                     flags[pos[idx]].append("duplicate")
@@ -204,10 +232,10 @@ def describe_fix(fix: dict) -> str:
         return "split into " + " + ".join(
             f"{crop} {P.extract_metrics(text, crop)['yield_bpa']:g} bpa"
             for crop, text in fix["split"].items())
-    if fix and "practice" in fix:
-        return "split by practice: " + " + ".join(
-            f"{'dryland' if p == 'Non-irrigated' else 'irrigated'} "
-            f"{P.extract_yields(fix['practice'][p])[0][0]:g} bpa" for p in P.PRACTICES)
+    if fix and "entries" in fix:
+        kind = {"Non-irrigated": "dryland", "Irrigated": "irrigated"}
+        return f"split into {len(fix['entries'])} reports: " + " + ".join(
+            f"{kind.get(p, 'field')} {y:g}" for _, p, y, _ in fix["entries"]) + " bpa"
     names = {"crop": "crop", "yield_bpa": "yield", "yield_min": "low", "yield_max": "high",
              "ly_yield": "last year", "expected_yield": "expected"}
     parts = []

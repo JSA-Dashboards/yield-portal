@@ -20,6 +20,7 @@ import os
 import csv
 import json
 import hashlib
+from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DL = r"C:\Users\KoltenPostin\Downloads"
@@ -425,8 +426,8 @@ def split_by_crop(text, default_crop=None):
 # "(205 APH)", "vs 180 aph". [^\d.] stops at a full stop, so in "better than
 # APH. Different producer making 240 bpa vs APH 220" the first APH (no value)
 # can't grab 240 — the second one gives 220.
-APH_RE = re.compile(
-    r"\baph\b[^\d.]{0,14}?(\d{2,3})|(\d{2,3})\s*aph\b", re.IGNORECASE)
+APH_RE = re.compile(     # ... and "vs 65 bpa APH" (Martin County, MN 2024)
+    r"\baph\b[^\d.]{0,14}?(\d{2,3})|(\d{2,3})\s*(?:(?:bpa|bu(?:/ac\w*)?)\s*)?aph\b", re.IGNORECASE)
 
 # Maturity, read the way each crop reports it, kept as text so ranges survive:
 #   corn  -> relative maturity days: "110 day", "108-112 day", "95-day", "106 Mat"
@@ -472,31 +473,72 @@ def extract_irrigation(text):
     return "Irrigated" if irr else "Non-irrigated" if non else None
 
 
-# --- a report that gives yields for dryland and irrigated ground -------------------
+# --- a report that gives yields for several fields, or for both practices ----------
 PRACTICES = ("Non-irrigated", "Irrigated")
 # The words only: a pivot can mark the dryland corners too ("outside the pivot").
 _PRACTICE_RE = re.compile(
     r"(?P<non>dry\s?land|non[- ]{0,2}irrigat\w*|not irrigat\w*|rain[- ]?fed)"
     r"|(?P<irr>(?<!non-)(?<!non )(?<!non- )(?<!not )\birrigat\w*\b(?!\s+yields))", re.I)
+# An acreage opens a field's entry: "40 acres", "a 40 acre field", "40 ac at 140",
+# "270a went", "160 A 71.4" (but not "248 A lot of...").
+_ACRES_RE = re.compile(
+    r"(?<![\d.,])\d{1,3}(?:,\d{3})*(?:\.\d+)?(?:\s*(?:acres?|ac)\b|a\b|\s+a\b(?!\s+[a-z]))", re.I)
 
 
-def split_by_practice(text):
-    """{"Non-irrigated": its text, "Irrigated": its text} when a report gives
-    yields for both, else None. A figure belongs to the practice named last
-    before it ("dryland has averaged 150-200 bpa while irrigated 205-250"), so
-    each practice's text runs from where it's named to where the other is. No
-    split when a figure comes before either is named (whose is it?) or either
-    has no figure of its own."""
+def _practice_of(m):
+    return PRACTICES[0] if m.group("non") else PRACTICES[1]
+
+
+# Another place inside a report's entries: a county word, a state abbreviation, or a
+# state named in full ("... SW Minnesota -Minnota/Taunton 200 acres = 173 BPA").
+_ENTRY_PLACE = re.compile(_PLACE_MARK.pattern + r"|(?i:\b(?:%s)\b)" % _FULL)
+
+
+def split_entries(text):
+    """(lead, [(practice, entry text), ...]) when a report gives yields for two or
+    more fields or for both practices, else None (Kolten, 2026-10-05: "multiple
+    entries, we need to add each one").
+
+    The report is cut wherever an acreage or a practice is named. A piece with no
+    figure of its own goes with a neighbour: one naming the practice of the
+    entry before it is that entry's remark ("... vs whole farm non-irrigated
+    average of 44 LY"); any other (an acreage, or the other practice, before its
+    figure) opens the next entry; the last always closes the last entry. An
+    entry's practice is the one it names, else the one named before it. No split
+    when a figure comes before the first cut (whose is it?), when a whole-farm or
+    overall average is stated (it speaks for the report), when another place is
+    named inside the entries (several reports run into one line), or when fewer
+    than two entries carry a yield."""
     text = text or ""
-    marks = [(m.start(), PRACTICES[0] if m.group("non") else PRACTICES[1])
-             for m in _PRACTICE_RE.finditer(text)]
-    if len({p for _, p in marks}) < 2 or extract_yields(text[:marks[0][0]])[0]:
+    # an acreage just after "last year" is last year's field ("Last year our 108 acre
+    # field across the lane yielded 83bpa"): a remark, not an entry
+    cuts = {m.start(): None for m in _ACRES_RE.finditer(text)
+            if not _LY_WORDS.search(text[max(0, m.start() - 25): m.start()])}
+    cuts.update({m.start(): _practice_of(m) for m in _PRACTICE_RE.finditer(text)})
+    if not cuts or FARM_AVG_RE.search(text):
         return None
-    parts = {}
-    for (start, practice), (end, _) in zip(marks, marks[1:] + [(len(text), None)]):
-        parts.setdefault(practice, []).append(text[start:end].strip())
-    parts = {p: " ".join(segs) for p, segs in parts.items()}
-    return parts if all(extract_yields(parts[p])[0] for p in PRACTICES) else None
+    starts = sorted(cuts)
+    lead = text[:starts[0]]
+    if extract_yields(lead)[0]:
+        return None
+    entries, practices, pending = [], [], ""
+    for i, (a, b) in enumerate(zip(starts, starts[1:] + [len(text)])):
+        piece = text[a:b]
+        if extract_yields(pending + piece)[0]:
+            entries.append(pending + piece)
+            named = _PRACTICE_RE.search(entries[-1])
+            practices.append(_practice_of(named) if named else (practices[-1] if practices else None))
+            pending = ""
+        elif entries and not pending and (b == len(text) or
+                                          (cuts[a] is not None and cuts[a] == practices[-1])):
+            entries[-1] += piece        # a remark on the entry before
+        else:
+            pending += piece            # an acreage or practice before its figure
+    if pending and entries:
+        entries[-1] += pending
+    if len(entries) < 2 or _ENTRY_PLACE.search("".join(entries)):
+        return None
+    return lead, [(p, e.strip()) for p, e in zip(practices, entries)]
 
 
 # Disease and damage named in the report, one normalised tag each. Weather damage
@@ -566,13 +608,8 @@ def _first(rx, text, groups=1):
     return None
 
 
-def extract_metrics(text, crop, practice=None):
-    """The figures and tags a report gives. With a practice ('Irrigated' or
-    'Non-irrigated'), a report that gives yields for both reads only that
-    practice's figures (split_by_practice); the rest comes from the whole text."""
-    parts = split_by_practice(text) if practice else None
-    own = parts[practice] if parts and practice in parts else None
-    cur, ly, exp = extract_yields(own if own is not None else text)
+def extract_metrics(text, crop):
+    cur, ly, exp = extract_yields(text)
     aph = _first(APH_RE, text, 2)
     if isinstance(aph, float) and not (20 <= aph <= 350):
         aph = None
@@ -585,7 +622,7 @@ def extract_metrics(text, crop, practice=None):
         "expected_yield": exp[0] if exp else None,
         "aph": aph,
         "maturity": extract_maturity(text, crop),
-        "irrigation": practice if own is not None else extract_irrigation(text),
+        "irrigation": extract_irrigation(text),
         "disease": extract_disease(text),
         "is_silage": "silage" in text.lower(),
         "is_record": bool(re.search(r"\brecord\b|best ever|best .* ever|all[- ]time",
@@ -593,39 +630,71 @@ def extract_metrics(text, crop, practice=None):
     }
 
 
-def dedup_hash(crop_year, crop, state, location, raw, practice=None):
+def dedup_hash(crop_year, crop, state, location, raw, part=None):
     """Stable row identity: same year/crop/state/location/text -> same hash,
-    regardless of case or how the PDF wrapped the line. The halves of a report
-    split by practice share its text, so they add their practice."""
+    regardless of case or how the PDF wrapped the line. The entries of a report
+    split by field or practice share its text, so each adds its part
+    ("Irrigated", "Non-irrigated|2", "entry|1": by_entry)."""
     text = re.sub(r"\s+", " ", raw.lower()).strip()
-    key = f"{crop_year}|{crop}|{state}|{location}|{text}" + (f"|{practice}" if practice else "")
+    key = f"{crop_year}|{crop}|{state}|{location}|{text}" + (f"|{part}" if part else "")
     return hashlib.sha1(key.encode()).hexdigest()[:16]
 
 
 def row_hash(row):
-    """dedup_hash for a row as it stands: with its practice when it's one half
-    of a report that gives yields for both."""
-    practice = row.get("irrigation")
-    split = practice in PRACTICES and split_by_practice(row.get("raw_text"))
+    """dedup_hash for a row as it stands, with its part when it's one entry of a
+    split report (`_part`, set by by_entry; not a stored column)."""
     return dedup_hash(row["crop_year"], row["crop"], row["state"], row["location"],
-                      row.get("raw_text") or "", practice if split else None)
+                      row.get("raw_text") or "", row.get("_part"))
 
 
-def by_practice(row):
-    """A report -> [it], or one report per practice when its text gives yields for
-    both dryland and irrigated ground: the same words in each (raw_text), each
-    with its own practice's figures, its irrigation set, and a hash of its own.
-    A report with yields for both crops is left whole: the two-crop split comes
-    first (a person confirms it on Review & edit), then each crop's half can
-    split by practice ("non-irrigated corn ... 150. First non-irrigated beans 67"
-    would otherwise make 150 a soybean yield)."""
-    text = row.get("raw_text")
-    if not split_by_practice(text) or split_by_crop(text, row.get("crop")):
+def entry_metrics(text, crop, lead, practice, entry):
+    """One entry's figures: its yields, last year, expectation, APH, maturity and
+    record from its own words (APH and maturity from the lead when it gives
+    none); silage from the lead and its words ("Dryland, 109 Day chopped for
+    silage" is that field, not the grain field before it); disease from the
+    whole report (often the area's); irrigation its practice, or what its
+    words say ("21 acres (under pivot) 202")."""
+    m = extract_metrics(entry, crop)
+    if m["aph"] is None and lead.strip():
+        m["aph"] = extract_metrics(lead, crop)["aph"]
+    m["maturity"] = m["maturity"] or (extract_maturity(lead, crop) if lead.strip() else None)
+    m.update(irrigation=practice or m["irrigation"], disease=extract_disease(text),
+             is_silage="silage" in (lead + " " + entry).lower())
+    return m
+
+
+def entries_of(text, crop):
+    """[(part, metrics), ...] for a report split by field or practice, else None.
+    A practice with one entry is its part ("Irrigated"), as the practice split
+    of 2026-10-05 hashed it; several entries are numbered ("Non-irrigated|2", or
+    "entry|1" when no practice is named). A report with yields for both crops is
+    left whole: the two-crop split comes first (a person confirms it on Review &
+    edit), then each crop's half can split ("non-irrigated corn ... 150. First
+    non-irrigated beans 67" would otherwise make 150 a soybean yield)."""
+    found = split_entries(text)
+    if not found or split_by_crop(text, crop):
+        return None
+    lead, entries = found
+    count = Counter(p for p, _ in entries)
+    seen, out = Counter(), []
+    for practice, entry in entries:
+        seen[practice] += 1
+        part = practice if practice and count[practice] == 1 else f"{practice or 'entry'}|{seen[practice]}"
+        out.append((part, entry_metrics(text, crop, lead, practice, entry)))
+    return out
+
+
+def by_entry(row):
+    """A report -> [it], or one report per entry when its text gives yields for
+    several fields or both practices (split_entries): the same words in each
+    (raw_text), each with its own entry's figures, its practice and a hash of
+    its own."""
+    entries = entries_of(row.get("raw_text"), row.get("crop"))
+    if not entries:
         return [row]
     out = []
-    for practice in PRACTICES:
-        r = dict(row)
-        r.update(extract_metrics(row["raw_text"], row.get("crop"), practice))
+    for part, metrics in entries:
+        r = dict(row, **metrics, _part=part)
         r["dedup_hash"] = row_hash(r)
         out.append(r)
     return out
@@ -660,12 +729,12 @@ def parse_pdf(src, crop_year, source_file=None):
 
 
 def parse_lines(lines, crop_year, default_crop=None, source_file=None,
-                report_source="pdf", split_practice=True):
+                report_source="pdf", split_reports=True):
     """Run the observation state machine over cleaned text lines: crop and
     state headers set context, a line opening with a location starts a row,
-    anything else continues the current row. A report with yields for both
-    dryland and irrigated ground becomes one row per practice (by_practice);
-    parse_email splits after it settles each crop, so it asks not to."""
+    anything else continues the current row. A report with yields for several
+    fields or both practices becomes one row per entry (by_entry); parse_email
+    splits after it settles each crop, so it asks not to."""
     obs = []
     crop = default_crop
     state_hdr = None
@@ -721,7 +790,7 @@ def parse_lines(lines, crop_year, default_crop=None, source_file=None,
                                      o["location"], o["raw_text"])
         o["report_source"] = report_source
         o["source_file"] = source_file
-    return [x for o in obs for x in by_practice(o)] if split_practice else obs
+    return [x for o in obs for x in by_entry(o)] if split_reports else obs
 
 
 # --- single emails ------------------------------------------------------------
@@ -896,7 +965,7 @@ def parse_email(subject, body, crop_year, date_reported=None):
     low_subj = (subject or "").lower()
     all_silage = "silage" in low_subj and not re.search(r"(?:and|&)\s+silage", low_subj)
     lines = _email_lines(body)
-    rows = parse_lines(lines, crop_year, report_source="email", split_practice=False)
+    rows = parse_lines(lines, crop_year, report_source="email", split_reports=False)
     located = [r for r in rows if r.get("state")]
     if located:
         rows = located              # drop greeting lines that preceded the first report
@@ -916,7 +985,7 @@ def parse_email(subject, body, crop_year, date_reported=None):
             r["crop"] = "Corn"
             r.update(extract_metrics(r["raw_text"], "Corn"))
             r["notes"] = "Crop from the yield: none named, and over 100 bpa is corn."
-        for x in by_practice(r):    # dryland and irrigated figures: a row each
+        for x in by_entry(r):       # several fields, or dryland and irrigated: a row each
             if all_silage:          # "YIELD: NC IA silage numbers"
                 x["is_silage"] = True
             x["dedup_hash"] = row_hash(x)

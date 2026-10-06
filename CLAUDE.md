@@ -97,7 +97,7 @@ came in by, and never changes a report — it raises flags:
 |---|---|---|
 | `incomplete` | no crop or no state (an email nobody could place) | crop → Corn when the state is known and the yield is over 100 bpa (new emails get that at parse time); else set by hand |
 | `split` | yields for both corn and soybeans in one report (`parse_pdfs.split_by_crop`) | one report per crop; the original is marked `superseded` |
-| `practice` | yields for both dryland and irrigated ground in one stored report that names no single practice (`split_by_practice`) | one report per practice (`checks.practice_rows`); the original is `superseded`; in the bulk fix |
+| `entries` | yields for several fields or both practices (`split_entries`) in a report that hasn't become that many live rows yet | one report per entry (`checks.entry_rows`); a stored row that already is an entry is kept, the report's other rows `superseded`; in the bulk fix |
 | `range` | corn outside 50–300 bpa, soybeans under 10 | — |
 | `corn?` | soybeans over 100 bpa (corn filed under the soybean header) | crop → Corn |
 | `reread` | today's parser reads a different yield or LY from the stored text | the fresh reading |
@@ -111,24 +111,36 @@ report run into the line as the other crop. Several fields of one crop stay one
 report (a chatty farm shouldn't count five times): the first figure is the
 yield, unless the report states a whole-farm/overall average, which then leads
 (`FARM_AVG_RE`, skipped when another place is named in between). The text-only
-checks (re-read, split, practice) are computed once with the cached reports
+checks (re-read, split, entries) are computed once with the cached reports
 (`checks.row_checks`), so a decision doesn't re-parse 1,300 reports.
 
-**Dryland and irrigated: a report each, both counted** (Kolten, 2026-10-05: about
-half the reports are keyed in by JSA, half come from Garrett, and both carry these).
-`split_by_practice` gives each figure to the practice named last before it
-("dryland has averaged 150-200 bpa while irrigated 205-250"); no split when a figure
-comes before either practice, when either has no figure of its own, or when the
-report also gives both crops (the crop split goes first, then each half can split).
-The two rows keep the **same full text**: each reads its own figures
-(`extract_metrics(text, crop, practice)`, also how `reread` re-reads a half), its
-hash adds the practice (`dedup_hash(..., practice)` / `row_hash`), the duplicate
-check never pairs different practices, and `report_text.ordered` shows the shared
-words once. New reports split at parse time (`by_practice`, in `parse_lines` and
-`parse_email`); on **Add reports → Enter by hand**, leaving Yield and Irrigation
-empty saves one report per practice, keyed-in fields kept. Practice words only
-("dryland", "non-irrigated", "irrigated"; "non- irrigated" wrapped by a PDF), not
-"pivot", which can mark dryland corners.
+**Every entry is a report** (Kolten, 2026-10-05/06: dryland and irrigated "need to be
+separated and both included"; "this had multiple entries, we need to add each one").
+About half the reports are keyed in by JSA, half come from Garrett; both carry these.
+`split_entries` cuts a report wherever an acreage ("40 acres", "40 ac at", "270a",
+"160 A") or a practice ("dryland", "non-irrigated", "irrigated"; "non- irrigated"
+wrapped by a PDF; never "pivot", which can mark dryland corners) is named. A piece
+with no figure goes with a neighbour: naming the practice of the entry before it, it's
+that entry's remark ("... and the non-irrigated average last year"); anything
+else opens the next entry; the last closes the last. An entry's practice is the one it
+names, else the one before. **No split** when a figure comes before the first cut,
+when a whole-farm/overall average is stated (it speaks for the report, `FARM_AVG_RE`),
+when another place is named among the entries (a county word, a state abbreviation or
+a state in full: PDF lines that run several reports together), when an acreage follows
+"last year" ("last year our 100 acre field made 80" is LY), or when the report also
+gives both crops (the crop split goes first, then each half can split).
+
+The rows keep the **same full text**; each reads its own figures from its entry
+(`entry_metrics`: APH and maturity fall back to the lead, silage is the lead's or the
+entry's, disease the whole report's). Each hash adds its part (`dedup_hash(...,
+part)`, carried as `_part` before insert, never stored): a practice with one entry is
+just the practice ("Irrigated", as the 2026-10-05 practice split hashed it), several
+are numbered ("Non-irrigated|2", "entry|1"). `reread` reads a row as the entry with its
+practice and yield; the duplicate check never pairs rows of one text, nor different
+practices; `report_text.ordered` shows the shared words once. New reports split at
+parse time (`by_entry`, in `parse_lines` and `parse_email`); on **Add reports → Enter
+by hand**, leaving Yield and Irrigation empty saves one report per entry, keyed-in
+fields kept. 76 PDF reports split this way (1,271 rows → 1,391).
 
 A person decides on **Review & edit → Needs review**: apply the fix, approve as it
 is, keep both (duplicates), exclude, or edit by hand. Decisions live in

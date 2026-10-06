@@ -80,6 +80,24 @@ rows = email("YIELD: Hall Co NE beans",
              "Hall Co, NE: Irrigated beans did 72 bpa. Dryland beans 51 bpa.")
 check("irrigated first: still a row each", sorted((r["irrigation"], r["yield_bpa"]) for r in rows),
       [("Irrigated", 72), ("Non-irrigated", 51)])
+rows = email("YIELD: Polk Co IA corn",
+             "Polk Co, IA: 40 acres made 231 bpa vs 220 APH. 80 acres made 248 bpa vs 230 APH, "
+             "best ever. 15 acres 196 bpa on the sand.")
+check("several fields: a report each, with its own APH",
+      [(r["yield_bpa"], r["aph"], r["is_record"]) for r in rows],
+      [(231, 220, False), (248, 230, True), (196, None, False)])
+check("...one text, three hashes", (len({r["raw_text"] for r in rows}),
+                                    len({r["dedup_hash"] for r in rows})), (1, 3))
+rows = email("YIELD: Polk Co IA corn", "Polk Co, IA: Irrigated 40 acres 232 bpa, 80 acres 241 bpa.")
+check("fields under one practice all take it", [r["irrigation"] for r in rows],
+      ["Irrigated", "Irrigated"])
+for label, body in (
+        ("a whole-farm average speaks for the fields",
+         "Polk Co, IA: 40 acres made 231 bpa, 80 acres made 248 bpa. Farm avg was 242 bpa."),
+        ("another place named among the fields (several reports in one line)",
+         "Polk Co, IA: 40 acres made 231 bpa, and over in Story County 80 acres made 248 bpa."),
+        ("one field", "Polk Co, IA: 40 acres made 231 bpa, the rest still standing.")):
+    check(f"no field split: {label}", len(email("YIELD: Polk Co IA corn", body)), 1)
 for label, body in (
         ("a figure before either practice is named", "Hall Co, NE: 210 bpa; dryland 180, irrigated 240."),
         ("only last year for one practice", "Hall Co, NE: dryland 180 bpa. Irrigated was 230 last year."),
@@ -121,8 +139,9 @@ check("'vs. 236 last year'", rows[0]["ly_yield"], 236)
 rows = email("YIELD: Macon Co IL ",
              "Corn - 120 acres green snap 151 bpa. 30 acres light hail 218bpa\n"
              "Beans - Averaging 75-80bpa at or slightly above APH.")
-check("split by crop opener", [(r["crop"], r["location"], r["yield_bpa"]) for r in rows],
-      [("Corn", "Macon Co", 151), ("Soybeans", "Macon Co", 75)])
+check("split by crop opener; the corn report's two fields a report each",
+      [(r["crop"], r["location"], r["yield_bpa"]) for r in rows],
+      [("Corn", "Macon Co", 151), ("Corn", "Macon Co", 218), ("Soybeans", "Macon Co", 75)])
 
 rows = email("RESEND: Correcting Subject YIELD: IL corn & beans (Adams & Brown Co)",
              "Adams Co IL (western) first 2 fields of beans 82-84 bpa. Pleased. Brown Co IL "
