@@ -278,8 +278,9 @@ layout; then re-run every cached report and diff against the previous readings.
 **Internal**: ISA states its copyright and no other terms. The page is registered only
 when `not VIEW_ONLY`, and the report text never goes in the repo.
 
-**Also in the admin portal** (`JSA-Dashboards/jsa-admin-portal`, `apps/strip_trials/`,
-since 2026-10-05): the same page, read-only, over the same table. Its
+**Also in the admin portal** as the **JSA Yield Observations** tile under Supply & Demand
+(`JSA-Dashboards/jsa-admin-portal`, `apps/strip_trials/`, since 2026-10-05): the same
+page, read-only, over the same table. Its
 `isa_strip_data.py` copies `with_nass`, `fields`, `by_season` and the NASS read from
 here, so a change to how fields are counted or compared with NASS belongs in both. It
 reads as `ADMIN_PORTAL_ROLE`, which needs SELECT on `YIELD_REPORTS.PUBLIC` (all + future
