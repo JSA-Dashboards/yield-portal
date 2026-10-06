@@ -173,6 +173,14 @@ check("...and lists its rows, so the fix keeps the one that's an entry already",
       sorted(oo.loc[0, "suggestion"]["siblings"]), sorted(h["dedup_hash"] for h in old_halves))
 check("...whose hash the fix makes again", kids[2]["dedup_hash"] in
       {k["dedup_hash"] for k in checks.entry_rows(oo.iloc[1].to_dict())}, True)
+check("...and leaves its figures alone when they agree", oo.loc[0, "suggestion"]["updates"], {})
+stale = [dict(old_halves[0], aph=57.0), old_halves[1]]      # split with the report's first APH
+so = checks.run(pd.DataFrame(stale), {})
+check("a kept entry read with another entry's APH takes its own",
+      so.loc[0, "suggestion"]["updates"], {kids[2]["dedup_hash"]: {"aph": 71.0}})
+moved = [dict(old_halves[0], yield_bpa=70.0, aph=57.0), old_halves[1]]
+check("...but not when a person changed its yield",
+      checks.run(pd.DataFrame(moved), {}).loc[0, "suggestion"]["updates"], {})
 
 if failures:
     print(f"{len(failures)} FAILED:")

@@ -94,8 +94,9 @@ def _fix(r, note):
     """Apply a report's suggested fix. A split makes one report per crop (each
     with its own sentences and figures) and marks the original superseded; an
     entries split makes one per field or practice (each with the whole text and
-    its own figures), keeps a stored row that already is one of them, and marks
-    the report's other rows superseded; any other fix is written over the
+    its own figures), keeps a stored row that already is one of them (with its
+    entry's figures: checks.entry_changes), and marks the report's other rows
+    superseded; any other fix is written over the
     report, which is then approved."""
     if "split" in (r["suggestion"] or {}):
         kids = checks.split_rows(r)
@@ -106,6 +107,8 @@ def _fix(r, note):
         kids = checks.entry_rows(r)
         keep = {k["dedup_hash"] for k in kids}
         db.insert_new(kids)
+        for h, changes in (r["suggestion"].get("updates") or {}).items():
+            db.update_row(h, changes)
         for h in r["suggestion"]["siblings"]:
             if h not in keep:
                 db.set_decision(h, "superseded", ["entries"],

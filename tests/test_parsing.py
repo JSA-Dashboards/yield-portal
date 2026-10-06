@@ -91,12 +91,33 @@ check("...one text, three hashes", (len({r["raw_text"] for r in rows}),
 rows = email("YIELD: Polk Co IA corn", "Polk Co, IA: Irrigated 40 acres 232 bpa, 80 acres 241 bpa.")
 check("fields under one practice all take it", [r["irrigation"] for r in rows],
       ["Irrigated", "Irrigated"])
+rows = email("YIELD: Polk Co IA corn",
+             "Polk Co, IA: 40 acres made 231 bpa vs 215 bpa last year 80 acres made 248 bpa.")
+check("a field right after 'vs ... last year' is the next entry",
+      [(r["yield_bpa"], r["ly_yield"]) for r in rows], [(231, 215), (248, None)])
+rows = email("YIELD: Polk Co IA corn",
+             "Polk Co, IA: 40 acres made 231 bpa. Last year our 60 acre field made 199 bpa.")
+check("...but a field 'last year' opens is last year's", [(r["yield_bpa"], r["ly_yield"]) for r in rows],
+      [(231, 199)])
+rows = email("YIELD: Polk Co IA corn",
+             "Polk Co, IA: 40 acres made 231 bpa vs 210 bpa APH. 80 acres went 198 bpa, APH was 205 bpa.")
+check("an APH is never part of the yield range, before or after its figure",
+      [(r["yield_bpa"], r["yield_min"], r["yield_max"], r["aph"]) for r in rows],
+      [(231, 231, 231, 210), (198, 198, 198, 205)])
+rows = email("YIELD: Polk Co IA corn", "Polk Co, IA: 40 acres 231 bpa, 80 acres 236 bpa aph 215")
+check("'236 bpa aph 215': 215 is the APH, not 236", [r["aph"] for r in rows], [None, 215])
+rows = email("YIELD: Polk Co IA beans", "Polk Co, IA: 120 acres went 61.5 bpa vs. 57.5bpa APH")
+check("a decimal APH", (rows[0]["yield_max"], rows[0]["aph"]), (61.5, 57.5))
+rows = email("YIELD: Polk Co IA corn", "Polk Co, IA: 120 acres made 195 bpa vs mid-Aug yield check at 221 bpa")
+check("a yield check is an estimate", (rows[0]["yield_max"], rows[0]["expected_yield"]), (195, 221))
 for label, body in (
         ("a whole-farm average speaks for the fields",
          "Polk Co, IA: 40 acres made 231 bpa, 80 acres made 248 bpa. Farm avg was 242 bpa."),
         ("another place named among the fields (several reports in one line)",
          "Polk Co, IA: 40 acres made 231 bpa, and over in Story County 80 acres made 248 bpa."),
-        ("one field", "Polk Co, IA: 40 acres made 231 bpa, the rest still standing.")):
+        ("one field", "Polk Co, IA: 40 acres made 231 bpa, the rest still standing."),
+        ("another state named before the fields (two reports run together)",
+         "Polk Co, IA: most fields near APH (220 APH) SE Nebraska corn 40 acres 231 bpa, 80 acres 248 bpa.")):
     check(f"no field split: {label}", len(email("YIELD: Polk Co IA corn", body)), 1)
 for label, body in (
         ("a figure before either practice is named", "Hall Co, NE: 210 bpa; dryland 180, irrigated 240."),

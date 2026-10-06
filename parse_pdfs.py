@@ -222,7 +222,11 @@ _EXP_POST = re.compile(
 # "was 215" match starts at "was"; the context before it ends at "thought it").
 _THOUGHT = (r"(?:thought|figured|guessed)(?:\s+(?:it|they|we|he|she))?"
             r"(?:\s+(?:was|were|would be|'d be|would make|would go|would run|might be|could be))?")
-_EXP_PRE = re.compile(r"(expect\w*|hop\w* (?:for|to)|%s)\W{0,10}$" % _THOUGHT, re.I)
+# A yield check is an estimate made before harvest: "190 bpa vs a mid-Aug yield check
+# at 215 bpa", "field checked in July at 230bpa".
+_EXP_PRE = re.compile(r"(expect\w*|hop\w* (?:for|to)|%s|yield\s+checks?(?:\s+(?:at|of|was|were|"
+                      r"showed|said))?|checked\s+(?:in|on|during)\s+\w+\s+(?:at|of))\W{0,10}$"
+                      % _THOUGHT, re.I)
 # ...but "better than expected 140 bpa" is a finished comparison: 140 is the
 # yield; so is "better than we thought 140 bpa".
 _EXP_DONE = re.compile(r"\b(?:than|as)\s+(?:expected|(?:\w+\s+)?thought)\W{0,3}$", re.I)
@@ -238,7 +242,11 @@ _LESS_MORE = re.compile(r"^\s*(?:\w+\s+)?(less|more|fewer)\s+than\b", re.I)
 _DIFF_POST = re.compile(
     r"^\s*(?:(?:higher|lower|more|less|better|worse|up|down)\s+"
     r"(?:yoy|y/y|year[- ]over[- ]year)\b|(?:of\s+)?(?:difference|swing|spread)\b)", re.I)
-_APH_PRE = re.compile(r"aph\W{0,8}$", re.I)
+# The APH is not a yield, before or after its figure: "APH 65 bpa", "APH was 42 bpa",
+# "vs 65 bpa APH" — but in "231 bpa aph 210" the figure after "aph" is the APH.
+_APH_NUM_AFTER = r"\s*(?:is|was|of|at|=|:)?\s*\d{2,3}(?:\.\d+)?(?!\d)(?!\s*(?:acres?\b|ac\b|a\b))"
+_APH_PRE = re.compile(r"aph\b(?:\s*(?:is|was|of|at|=|:)\s*)?(?:about\s+|around\s+)?\W{0,8}$", re.I)
+_APH_POST = re.compile(r"^\s*(?:(?:bpa|bu\w*(?:/ac\w*)?)\s*)?aph\b(?!%s)" % _APH_NUM_AFTER, re.I)
 
 
 # What must NOT follow a bare yield number: moisture/acres/maturity/test-weight
@@ -282,7 +290,7 @@ def _classify(text, start, end, val, cur, ly, exp, lo=None):
     if (_PRE_DELTA.search(before) or (val < 45 and _POST_DELTA.match(after))
             or _LESS_MORE.match(after) or _DIFF_POST.match(after)):
         return
-    if _APH_PRE.search(before):
+    if _APH_PRE.search(before) or _APH_POST.match(after):
         return
     ly_after = _LY_POST.match(after)
     if ly_after and _LY_LEADS.match(text[end + ly_after.end(): end + ly_after.end() + 45]):
@@ -426,8 +434,13 @@ def split_by_crop(text, default_crop=None):
 # "(205 APH)", "vs 180 aph". [^\d.] stops at a full stop, so in "better than
 # APH. Different producer making 240 bpa vs APH 220" the first APH (no value)
 # can't grab 240 — the second one gives 220.
-APH_RE = re.compile(     # ... and "vs 65 bpa APH" (Martin County, MN 2024)
-    r"\baph\b[^\d.]{0,14}?(\d{2,3})|(\d{2,3})\s*(?:(?:bpa|bu(?:/ac\w*)?)\s*)?aph\b", re.IGNORECASE)
+# A figure before "APH" is the APH ("vs 60 bpa APH", "vs. 58.5bpa APH") unless "APH"
+# names its own: in "90 acres 228 bpa aph 205" 228 is the yield. "(205 APH) 2. 150
+# acres" is still 205: a list number or an acreage after it isn't an APH.
+APH_RE = re.compile(
+    r"\baph\b[^\d.]{0,14}?(\d{2,3}(?:\.\d+)?)"
+    r"|(?<![\d.])(\d{2,3}(?:\.\d+)?)\s*(?:(?:bpa|bu(?:/ac\w*)?)\s*)?aph\b(?!%s)" % _APH_NUM_AFTER,
+    re.IGNORECASE)
 
 # Maturity, read the way each crop reports it, kept as text so ranges survive:
 #   corn  -> relative maturity days: "110 day", "108-112 day", "95-day", "106 Mat"
@@ -490,8 +503,22 @@ def _practice_of(m):
 
 
 # Another place inside a report's entries: a county word, a state abbreviation, or a
-# state named in full ("... SW Minnesota -Minnota/Taunton 200 acres = 173 BPA").
+# state named in full ("... over in SE Iowa 100 acres = 190 BPA").
 _ENTRY_PLACE = re.compile(_PLACE_MARK.pattern + r"|(?i:\b(?:%s)\b)" % _FULL)
+_STATE_FULL = re.compile(r"\b(?:%s)\b" % _FULL, re.I)
+
+
+def _ly_field(text, at):
+    """True for an acreage that is last year's field: "last year" opens its clause
+    ("Last year our 100 acre field next door made 80bpa"). One after a comparison
+    ending in "last year" opens the next entry ("220 bpa vs 190 bpa last year 150
+    acres made 230 bpa")."""
+    near = list(_LY_WORDS.finditer(text[max(0, at - 25): at]))
+    if not near:
+        return False
+    start = max(0, at - 25) + near[-1].start()
+    clause = re.split(r"[.;:,!?]\s", text[:start])[-1]
+    return not re.search(r"\d", clause)
 
 
 def split_entries(text):
@@ -501,25 +528,25 @@ def split_entries(text):
 
     The report is cut wherever an acreage or a practice is named. A piece with no
     figure of its own goes with a neighbour: one naming the practice of the
-    entry before it is that entry's remark ("... vs whole farm non-irrigated
-    average of 44 LY"); any other (an acreage, or the other practice, before its
+    entry before it is that entry's remark ("... and the non-irrigated average
+    last year"); any other (an acreage, or the other practice, before its
     figure) opens the next entry; the last always closes the last entry. An
     entry's practice is the one it names, else the one named before it. No split
     when a figure comes before the first cut (whose is it?), when a whole-farm or
     overall average is stated (it speaks for the report), when another place is
-    named inside the entries (several reports run into one line), or when fewer
-    than two entries carry a yield."""
+    named inside the entries, or a state in full after the report's own place
+    before them (several reports run into one line: "Town, MN ... NE Iowa beans
+    100 acres 50 bushel"), or when fewer than two entries carry a yield."""
     text = text or ""
-    # an acreage just after "last year" is last year's field ("Last year our 108 acre
-    # field across the lane yielded 83bpa"): a remark, not an entry
-    cuts = {m.start(): None for m in _ACRES_RE.finditer(text)
-            if not _LY_WORDS.search(text[max(0, m.start() - 25): m.start()])}
+    # last year's field is a remark, not an entry (_ly_field)
+    cuts = {m.start(): None for m in _ACRES_RE.finditer(text) if not _ly_field(text, m.start())}
     cuts.update({m.start(): _practice_of(m) for m in _PRACTICE_RE.finditer(text)})
     if not cuts or FARM_AVG_RE.search(text):
         return None
     starts = sorted(cuts)
     lead = text[:starts[0]]
-    if extract_yields(lead)[0]:
+    own = _ENTRY_PLACE.search(lead)
+    if extract_yields(lead)[0] or (own and _STATE_FULL.search(lead, own.end())):
         return None
     entries, practices, pending = [], [], ""
     for i, (a, b) in enumerate(zip(starts, starts[1:] + [len(text)])):
@@ -650,10 +677,10 @@ def row_hash(row):
 def entry_metrics(text, crop, lead, practice, entry):
     """One entry's figures: its yields, last year, expectation, APH, maturity and
     record from its own words (APH and maturity from the lead when it gives
-    none); silage from the lead and its words ("Dryland, 109 Day chopped for
+    none); silage from the lead and its words ("Dryland, 108 day chopped for
     silage" is that field, not the grain field before it); disease from the
     whole report (often the area's); irrigation its practice, or what its
-    words say ("21 acres (under pivot) 202")."""
+    words say ("20 acres (under pivot) 210")."""
     m = extract_metrics(entry, crop)
     if m["aph"] is None and lead.strip():
         m["aph"] = extract_metrics(lead, crop)["aph"]
@@ -669,8 +696,8 @@ def entries_of(text, crop):
     of 2026-10-05 hashed it; several entries are numbered ("Non-irrigated|2", or
     "entry|1" when no practice is named). A report with yields for both crops is
     left whole: the two-crop split comes first (a person confirms it on Review &
-    edit), then each crop's half can split ("non-irrigated corn ... 150. First
-    non-irrigated beans 67" would otherwise make 150 a soybean yield)."""
+    edit), then each crop's half can split ("dryland corn ... 160. First dryland
+    beans 60" would otherwise make 160 a soybean yield)."""
     found = split_entries(text)
     if not found or split_by_crop(text, crop):
         return None
