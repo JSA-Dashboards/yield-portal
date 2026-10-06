@@ -75,6 +75,14 @@ def _entries(row):
     return row["_entries"] if "_entries" in row else P.entries_of(row["raw_text"] or "", row["crop"])
 
 
+def entry_hash(row, part) -> str:
+    """The hash of one entry of a row's report. None, not NaN, for a blank field:
+    the parser's hashes have "None" in the key."""
+    return P.dedup_hash(*(None if _missing(row[k]) else row[k]
+                          for k in ("crop_year", "crop", "state", "location")),
+                        row["raw_text"] or "", part)
+
+
 def reread(row, entries=None) -> dict:
     """{field: value} the current parser reads differently from what's stored,
     or {} when neither the yield nor last year's yield would change. A report
@@ -83,8 +91,12 @@ def reread(row, entries=None) -> dict:
     'entries' check covers."""
     entries = _entries(row) if entries is None else entries
     if entries:
-        m = next((m for _, m in entries if _same(m["yield_bpa"], row["yield_bpa"])
-                  and _practice(row) in (None, m["irrigation"])), None)
+        # its own entry by hash: two fields of one report can share a yield
+        # ("43 acres made 48 bpa vs 63 ... 115 acres made 48 bpa vs 59")
+        m = next((m for part, m in entries if entry_hash(row, part) == row["dedup_hash"]), None)
+        if m is None:
+            m = next((m for _, m in entries if _same(m["yield_bpa"], row["yield_bpa"])
+                      and _practice(row) in (None, m["irrigation"])), None)
         if m is None:
             return {}
     else:
@@ -193,9 +205,7 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
             # a row that already is one of the entries stays, with its entry's figures
             updates = {}
             for part, m in entries:
-                h = P.dedup_hash(*(None if _missing(r[k]) else r[k] for k in
-                                   ("crop_year", "crop", "state", "location")),
-                                 r["raw_text"] or "", part)
+                h = entry_hash(r, part)
                 if h in mine and (ch := entry_changes(m, by_hash[h])):
                     updates[h] = ch
             suggestion[i] = {"entries": [[part, m["irrigation"], m["yield_bpa"], t]
