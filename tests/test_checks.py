@@ -120,16 +120,16 @@ pre = checks.row_checks(pd.DataFrame([both]))
 check("row checks computed ahead give the same result",
       checks.run(pre, {}).loc[0, "suggestion"], one.loc[0, "suggestion"])
 
-# dryland and irrigated figures stored as one report (keyed in by hand, or loaded before
-# the parser split them): flagged, and the fix makes a report per practice
+# several entries stored as one report (keyed in by hand, or loaded before the parser
+# split them): flagged, and the fix makes a report per entry
 mixed_text = "Half done, dryland 150-190 bpa while irrigated 215-240 bpa. Tar spot bad."
 mixed = row(mixed_text, state="NE", location="Saline Co", yield_bpa=None, yield_min=None,
             yield_max=None, irrigation=None, maturity="112", notes="by phone")
 mo = checks.run(pd.DataFrame([mixed]), {})
-check("dryland + irrigated: flagged 'practice'", mo.loc[0, "review_flags"], ["practice"])
-check("...described with each practice's yield", checks.describe_fix(mo.loc[0, "suggestion"]),
-      "split by practice: dryland 150 bpa + irrigated 215 bpa")
-halves = checks.practice_rows(mo.iloc[0].to_dict())
+check("dryland + irrigated: flagged 'entries'", mo.loc[0, "review_flags"], ["entries"])
+check("...described with each entry's yield", checks.describe_fix(mo.loc[0, "suggestion"]),
+      "split into 2 reports: dryland 150 + irrigated 215 bpa")
+halves = checks.entry_rows(mo.iloc[0].to_dict())
 check("the fix makes a dryland and an irrigated report",
       [(h["irrigation"], h["yield_bpa"], h["yield_max"]) for h in halves],
       [("Non-irrigated", 150, 190), ("Irrigated", 215, 240)])
@@ -139,16 +139,40 @@ check("...each the whole text, with its own hash, the keyed-in maturity and the 
        {h["maturity"] for h in halves}, {h["notes"] for h in halves}),
       (True, 3, {"112"}, {"by phone"}))
 ho = checks.run(pd.DataFrame(halves), {})
-check("the halves raise nothing: each is re-read on its own figures",
+check("the halves raise nothing: each is re-read as its own entry",
       ho["review_flags"].tolist(), [[], []])
-same = checks.practice_rows(row("Dryland made 200 bpa and irrigated 200 bpa too.", state="NE",
-                                 location="Saline Co", irrigation=None))
-check("halves with the same figure aren't each other's duplicate",
+same = checks.entry_rows(row("Dryland made 200 bpa and irrigated 200 bpa too.", state="NE",
+                              location="Saline Co", irrigation=None))
+check("entries with the same figure aren't each other's duplicate",
       checks.run(pd.DataFrame(same), {})["review_flags"].tolist(), [[], []])
-check("a row a person set to one practice isn't flagged",
+check("one row a person set to one practice still asks for the other entry",
       checks.run(pd.DataFrame([dict(mixed, irrigation="Irrigated", yield_bpa=215.0,
                                     yield_min=215.0, yield_max=240.0)]), {})
-      .loc[0, "review_flags"], [])
+      .loc[0, "review_flags"], ["entries"])
+
+# fields listed one after another, each with its acres and APH
+fields_text = ("Saline Co, NE Non-irrigated 35 acres 48.5 BPA APH 57.0, 90 acres 46.0 BPA "
+               "APH 55.0 Irrigated 120 acres 68.0 BPA APH 71.0")
+fields = row(fields_text, crop="Soybeans", state="NE", location="Saline Co")
+fo = checks.run(pd.DataFrame([fields]), {})
+check("three fields: 'entries', three reports suggested",
+      checks.describe_fix(fo.loc[0, "suggestion"]),
+      "split into 3 reports: dryland 48.5 + dryland 46 + irrigated 68 bpa")
+kids = checks.entry_rows(fo.iloc[0].to_dict())
+check("...each field with its practice, yield and APH",
+      [(k["irrigation"], k["yield_bpa"], k["aph"]) for k in kids],
+      [("Non-irrigated", 48.5, 57), ("Non-irrigated", 46, 55), ("Irrigated", 68, 71)])
+# split earlier by practice only: the dryland half held two fields
+old_halves = [dict(kids[2]), dict(fields, irrigation="Non-irrigated", aph=57.0,
+                                  dedup_hash=P.dedup_hash(2026, "Soybeans", "NE", "Saline Co",
+                                                          fields_text, "Non-irrigated"))]
+oo = checks.run(pd.DataFrame(old_halves), {})
+check("a report with fewer rows than entries asks again, on each of its rows",
+      oo["review_flags"].tolist(), [["entries"], ["entries"]])
+check("...and lists its rows, so the fix keeps the one that's an entry already",
+      sorted(oo.loc[0, "suggestion"]["siblings"]), sorted(h["dedup_hash"] for h in old_halves))
+check("...whose hash the fix makes again", kids[2]["dedup_hash"] in
+      {k["dedup_hash"] for k in checks.entry_rows(oo.iloc[1].to_dict())}, True)
 
 if failures:
     print(f"{len(failures)} FAILED:")

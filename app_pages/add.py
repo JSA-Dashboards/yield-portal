@@ -249,9 +249,9 @@ else:
         location = c5.text_input("Location", placeholder="Morgan Co")
         c6, c7, c8, c9 = st.columns(4)
         yld = c6.number_input("Yield (bpa)", min_value=0.0, max_value=400.0, value=None,
-                              help="Dryland and irrigated figures in one report? Leave Yield and "
-                                   "Irrigation empty: it's saved as one report per practice, "
-                                   "each with its figures from the text.")
+                              help="Several fields, or dryland and irrigated figures, in one "
+                                   "report? Leave Yield and Irrigation empty: it's saved as one "
+                                   "report per entry, each with its figures from the text.")
         ly = c7.number_input("Last year (bpa)", min_value=0.0, max_value=400.0, value=None)
         aph = c8.number_input("APH", min_value=0.0, max_value=400.0, value=None)
         maturity = c9.text_input("Maturity", placeholder="110 or 2.6")
@@ -278,11 +278,11 @@ else:
             row["dedup_hash"] = P.dedup_hash(row["crop_year"], crop, state,
                                              row["location"], raw)
             rows = [row]
-            halves = (P.by_practice(dict(row, irrigation=None))
+            halves = (P.by_entry(dict(row, irrigation=None))
                       if yld is None and irrigation in (None, "Mixed") else [])
             if len(halves) > 1:
-                # dryland and irrigated figures: one report per practice, read from the
-                # text; what was keyed in still wins
+                # several fields, or dryland and irrigated: one report per entry, read
+                # from the text; what was keyed in still wins
                 keyed = {"ly_yield": ly, "aph": aph, "maturity": row["maturity"],
                          "disease": row["disease"]}
                 for k in halves:
@@ -295,8 +295,9 @@ else:
             inserted, _ = db.insert_new(rows)
             data.invalidate()
             if len(rows) > 1 and inserted:
-                st.success("Saved as one report per practice: " + "; ".join(
-                    f"{'dryland' if k['irrigation'] == 'Non-irrigated' else 'irrigated'} "
+                kind = {"Non-irrigated": "dryland", "Irrigated": "irrigated"}
+                st.success(f"Saved as {len(rows)} reports, one per entry: " + "; ".join(
+                    f"{kind.get(k['irrigation'], 'field')} "
                     + (f"{k['yield_min']:g}–{k['yield_max']:g}" if k["yield_max"] != k["yield_min"]
                        else f"{k['yield_bpa']:g}") + " bpa" for k in rows) + ".",
                     icon=":material/call_split:")
