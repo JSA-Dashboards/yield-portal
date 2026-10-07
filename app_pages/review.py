@@ -329,7 +329,8 @@ if mode == "queue":
                 def _num(v):
                     return None if v is None or v != v else float(v)
                 yld = c4.number_input("Yield (bpa)", value=_num(r["yield_bpa"]), step=1.0)
-                ly = c5.number_input("Last year (bpa)", value=_num(r["ly_yield"]), step=1.0)
+                ly = c5.number_input("Prior year (bpa)", value=_num(r["ly_yield"]), step=1.0,
+                                     help="A like field's yield the prior year it grew this crop: with rotation, often two seasons back.")
                 aph = c6.number_input("APH (bpa)", value=_num(r["aph"]), step=1.0)
                 if st.form_submit_button("Save and approve", type="primary"):
                     db.update_row(r["dedup_hash"], {"crop": crop, "state": state,
@@ -388,7 +389,7 @@ edited = st.data_editor(
                  "is, in its own words."),
         "yield_min": st.column_config.NumberColumn("Low", format="%.1f"),
         "yield_max": st.column_config.NumberColumn("High", format="%.1f"),
-        "ly_yield": st.column_config.NumberColumn("LY", format="%.1f"),
+        "ly_yield": st.column_config.NumberColumn("Prior yr", format="%.1f", help="A like field's yield the prior year it grew this crop: with rotation, often two seasons back."),
         "expected_yield": st.column_config.NumberColumn("Expected", format="%.1f"),
         "aph": st.column_config.NumberColumn("APH", format="%.0f"),
         "maturity": "Maturity",

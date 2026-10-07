@@ -128,7 +128,8 @@ when a whole-farm/overall average is stated (it speaks for the report, `FARM_AVG
 when another place is named among the entries (a county word, a state abbreviation or
 a state in full: PDF lines that run several reports together; also a state in full
 after the report's own place, before the entries: "Town, MN ... NE Iowa beans 100
-acres 50 bushel", left whole), when "last year" opens the clause an acreage is in
+acres 50 bushel", left whole; a region of one state is one place: "NC Nebraska
+beans 120 acres ..." splits), when "last year" opens the clause an acreage is in
 ("last year our 100 acre field made 80" is LY; but "220 bpa vs 190 bpa last year 150
 acres made 230" is the next field, `_ly_field`), or when the report also gives both
 crops (the crop split goes first, then each half can split). Giving a report's
@@ -347,6 +348,19 @@ Kept: yield (`yield_bpa` + low/high + `ly_yield` + `expected_yield`), `aph`,
 (comma-joined tags; weather damage included). **Dropped on purpose: moisture,
 acres.** Never add test weight, fungicide, harvest progress or planting date.
 The full original text is always kept in `raw_text`.
+
+**`ly_yield` is the prior year, of a like field** (Kolten, 2026-10-07: "people
+typically rotate so its prior year of corn or beans. You skip a year due to
+rotation. So maybe call it prior year. Also we need to drop the idea of 'same
+field' and call it a like field"). It's what the reporter compares with: the last
+season a like field grew this crop, often two back ("vs. 62bpa in 2023" in a 2025
+bean report; "vs 270 bpa in 2024" in a 2026 corn one). Keep those; the parser
+takes "vs N in <any year>" and "last year" alike. Every label says **Prior
+year** / "Prior yr" / "vs prior yr" and **like field**, never "last year", "LY"
+or "same field" (Explore tile "Vs like field, prior year", the weekly email tile,
+Reports vs normal, the Add and edit forms, `describe_fix`). Not renamed: NASS's
+county "last season" and a seed plot's "Same plot LY", which really are the
+season before at the same place. The column keeps its name, `ly_yield`.
 
 ## Yield attribution is the fragile part — run the tests
 

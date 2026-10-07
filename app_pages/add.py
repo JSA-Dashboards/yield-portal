@@ -252,7 +252,8 @@ else:
                               help="Several fields, or dryland and irrigated figures, in one "
                                    "report? Leave Yield and Irrigation empty: it's saved as one "
                                    "report per entry, each with its figures from the text.")
-        ly = c7.number_input("Last year (bpa)", min_value=0.0, max_value=400.0, value=None)
+        ly = c7.number_input("Prior year (bpa)", min_value=0.0, max_value=400.0, value=None,
+                             help="A like field's yield the prior year it grew this crop: with rotation, often two seasons back.")
         aph = c8.number_input("APH", min_value=0.0, max_value=400.0, value=None)
         maturity = c9.text_input("Maturity", placeholder="110 or 2.6")
         irrigation = st.pills("Irrigation", data.IRRIGATION)

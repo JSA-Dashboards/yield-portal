@@ -80,7 +80,7 @@ def attach(reports: pd.DataFrame, county_tbl: pd.DataFrame, state_tbl: pd.DataFr
     out["r_ly"] = y / out["base_ly"]
     out["r_usda"] = y / out["base_usda"]
     out["r_final"] = y / out["county_final"]
-    out["pair_ly_pct"] = (y / out["ly_yield"] - 1) * 100      # same field, reporter's own LY
+    out["pair_ly_pct"] = (y / out["ly_yield"] - 1) * 100      # like field, reporter's own prior year
     out["pair_aph_pct"] = (y / out["aph"] - 1) * 100
     return out
 

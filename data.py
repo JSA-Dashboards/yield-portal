@@ -101,7 +101,7 @@ def _typed(rows) -> pd.DataFrame:
 def headline(f: pd.DataFrame, latest: int, prev=None) -> dict:
     """The headline tiles for `latest` against `prev` (Explore and the weekly
     email): report count; average reported yield and its change in bpa and %;
-    the average gain on the same field last year and on APH, in bpa and as a %
+    the average gain on a like field's prior year and on APH, in bpa and as a %
     of those reports' LY / APH bushels (sum of gains / sum of LY), over the
     reports that give both; the most-cited damage."""
     nan = float("nan")

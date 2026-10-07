@@ -96,8 +96,9 @@ with st.container(horizontal=True):
                    f"against the final: {_band('r_usda')}. {now['n_r_usda']} reports · "
                    f"{analysis.tier(now['n_r_usda'])}.")
     pair = now["pair_ly_pct"]
-    st.metric("Same field vs last year", "—" if pair is None else f"{pair:+.0f}%", border=True,
-              help=f"Median change on reports that give the same field's yield last year — no "
+    st.metric("Like field vs prior year", "—" if pair is None else f"{pair:+.0f}%", border=True,
+              help=f"Median change on reports that give a like field's prior-year yield (the "
+                   f"last season it grew this crop, often two back with rotation) — no "
                    f"NASS involved. {now['n_pair_ly_pct']} reports · "
                    f"{analysis.tier(now['n_pair_ly_pct'])}.")
 
@@ -119,7 +120,7 @@ with st.container(border=True):
             "r_ly": st.column_config.NumberColumn("vs last season", format="%.2f×"),
             "r_usda": st.column_config.NumberColumn("vs USDA", format="%.2f×"),
             "usda_vs": "USDA number",
-            "pair_ly_pct": st.column_config.NumberColumn("Same field vs LY", format="%+.0f%%"),
+            "pair_ly_pct": st.column_config.NumberColumn("Like field vs prior yr", format="%+.0f%%"),
             "n_pair_ly_pct": st.column_config.NumberColumn("Same-field reports"),
         })
     st.caption("A season's ratios move with which fields happened to report, so a change of a "
