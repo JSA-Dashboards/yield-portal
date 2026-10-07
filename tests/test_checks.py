@@ -83,7 +83,7 @@ check("a new flag on an approved report asks again", decided.loc[4, "status"], "
 check("superseded", decided.loc[5, "status"], "superseded")
 check("a superseded twin no longer makes a duplicate", decided.loc[6, "review_flags"], [])
 check("describe a fix", checks.describe_fix({"crop": "Corn", "yield_bpa": 247.0, "ly_yield": None}),
-      "crop → Corn, yield → 247, last year → —")
+      "crop → Corn, yield → 247, prior year → —")
 
 # --- an email nobody could place ------------------------------------------------------
 lost = row("Running about 210 bpa so far.", crop=None, state=None, location=None)

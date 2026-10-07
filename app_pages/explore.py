@@ -130,10 +130,12 @@ with st.container(horizontal=True):
               border=True,
               help="Simple average of the reported yields. Reports cluster where "
                    "the scouts have contacts, so read it as the tone of the reports.")
-    st.metric("Vs same field last year", _num(h["vs_ly"], " bpa", signed=True),
-              delta=_pct(h["vs_ly_pct"], " vs LY"), border=True,
-              help=f"Average of (yield − last year's yield) over the {h['vs_ly_n']} reports "
-                   "that gave both; the % is their gain over last year's bushels.")
+    st.metric("Vs like field, prior year", _num(h["vs_ly"], " bpa", signed=True),
+              delta=_pct(h["vs_ly_pct"], " vs prior yr"), border=True,
+              help=f"Average of (yield − a like field's prior-year yield) over the "
+                   f"{h['vs_ly_n']} reports that gave both; the % is their gain over those "
+                   "bushels. Prior year: the last season the like field grew this crop, "
+                   "often two back with rotation.")
     st.metric("Vs APH", _num(h["vs_aph"], " bpa", signed=True),
               delta=_pct(h["vs_aph_pct"], " vs APH"), border=True,
               help=f"Average of (yield − APH) over the {h['vs_aph_n']} reports that gave "
@@ -277,9 +279,8 @@ with st.container(border=True):
                 "Field", width="medium",
                 help="When a report gives several fields: which one this row is, in its own "
                      "words. The Report column shows the whole text."),
-            "ly_yield": st.column_config.NumberColumn("LY", format="%.1f",
-                                                      help="Same field, last year"),
-            "vs_ly": st.column_config.NumberColumn("Vs LY", format="%+.1f"),
+            "ly_yield": st.column_config.NumberColumn("Prior yr", format="%.1f", help="A like field's yield the prior year it grew this crop: with rotation, often two seasons back."),
+            "vs_ly": st.column_config.NumberColumn("Vs prior yr", format="%+.1f"),
             "aph": st.column_config.NumberColumn("APH", format="%.0f"),
             "maturity": st.column_config.TextColumn(
                 "Maturity", help="Corn: relative maturity in days. Soybeans: maturity group."),

@@ -111,7 +111,7 @@ def field_acres(row, field):
 
 def reread(row, entries=None) -> dict:
     """{field: value} the current parser reads differently from what's stored,
-    or {} when neither the yield nor last year's yield would change. A report
+    or {} when neither the yield nor the prior year's would change. A report
     split by field or practice is read as the entry this row is (its practice
     and yield); a row that matches no entry is a report not split yet, which the
     'entries' check covers."""
@@ -320,7 +320,7 @@ def describe_fix(fix: dict) -> str:
         return f"split into {len(fix['entries'])} reports: " + " + ".join(
             f"{kind.get(p, 'field')} {y:g}" for _, p, y, _ in fix["entries"]) + " bpa"
     names = {"crop": "crop", "yield_bpa": "yield", "yield_min": "low", "yield_max": "high",
-             "ly_yield": "last year", "expected_yield": "expected"}
+             "ly_yield": "prior year", "expected_yield": "expected"}
     parts = []
     for k, v in (fix or {}).items():
         shown = "—" if _missing(v) else (f"{v:g}" if isinstance(v, float) else str(v))

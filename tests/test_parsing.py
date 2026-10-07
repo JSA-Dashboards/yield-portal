@@ -110,6 +110,9 @@ rows = email("YIELD: Polk Co IA beans", "Polk Co, IA: 120 acres went 61.5 bpa vs
 check("a decimal APH", (rows[0]["yield_max"], rows[0]["aph"]), (61.5, 57.5))
 rows = email("YIELD: Polk Co IA corn", "Polk Co, IA: 120 acres made 195 bpa vs mid-Aug yield check at 221 bpa")
 check("a yield check is an estimate", (rows[0]["yield_max"], rows[0]["expected_yield"]), (195, 221))
+rows = email("YIELD: SE Iowa beans", "SE Iowa beans 120 acres 60 bpa. Irrigated. 80 acres 55 bpa.")
+check("a region of one state ('SE Iowa') before the fields is one place: a report per field",
+      [r["yield_bpa"] for r in rows], [60, 55])
 for label, body in (
         ("a whole-farm average speaks for the fields",
          "Polk Co, IA: 40 acres made 231 bpa, 80 acres made 248 bpa. Farm avg was 242 bpa."),

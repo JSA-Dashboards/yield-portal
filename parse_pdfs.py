@@ -546,7 +546,10 @@ def split_entries(text):
     starts = sorted(cuts)
     lead = text[:starts[0]]
     own = _ENTRY_PLACE.search(lead)
-    if extract_yields(lead)[0] or (own and _STATE_FULL.search(lead, own.end())):
+    if own:      # "NC Nebraska", "SE Iowa": a region of one state, one place
+        region = re.match(r"\s+(?:%s)\b" % _FULL, lead[own.end():], re.I)
+        own_end = own.end() + (region.end() if region else 0)
+    if extract_yields(lead)[0] or (own and _STATE_FULL.search(lead, own_end)):
         return None
     entries, practices, pending = [], [], ""
     for i, (a, b) in enumerate(zip(starts, starts[1:] + [len(text)])):

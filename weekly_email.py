@@ -182,7 +182,7 @@ def tiles_html(h, n_new):
         _tile(f"Reports · {h['latest']}", f"{h['reports']:,}",
               f"+{n_new} this week" if n_new else "none new this week", BLUE if n_new else GRAY),
         _tile("Avg reported yield", avg, avg_sub, _color(h["avg_change"])),
-        _tile("Vs same field last year", _signed(h["vs_ly"], " bpa"), ly_sub, _color(h["vs_ly"])),
+        _tile("Vs like field, prior year", _signed(h["vs_ly"], " bpa"), ly_sub, _color(h["vs_ly"])),
         _tile("Vs APH", _signed(h["vs_aph"], " bpa"), aph_sub, _color(h["vs_aph"])),
         _tile("Most-cited damage", e(dmg), f"{dmg_n} reports" if dmg_n else ""),
     ]
