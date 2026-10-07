@@ -8,6 +8,8 @@ Flagged and excluded reports stay in the archive and on Report text, but stay
 out of averages and charts until cleared. Approval covers the flags it was given
 for: a new flag on an approved report (say after a parser change) asks again.
 """
+import re
+
 import pandas as pd
 
 import parse_pdfs as P
@@ -83,6 +85,30 @@ def entry_hash(row, part) -> str:
                         row["raw_text"] or "", part)
 
 
+def field_of(row, entries=None):
+    """(i, n, words) when a row is one of the n entries its report gives: the i-th,
+    in its own words. None for a report that is one entry (or not split yet). Every
+    entry row carries the whole report's text, so this says which field it is."""
+    entries = _entries(row) if entries is None else entries
+    found = P.split_entries(row["raw_text"] or "") if entries else None
+    if not found:
+        return None
+    for i, ((part, _), (_, words)) in enumerate(zip(entries, found[1]), 1):
+        if entry_hash(row, part) == row["dedup_hash"]:
+            return i, len(entries), words
+    return None
+
+
+def field_acres(row, field):
+    """The acreage a row's field names (its entry's first), or a whole report's
+    only one; None when it names none, or several."""
+    words = field[2] if field else (row["raw_text"] or "")
+    hits = [m for m in P._ACRES_RE.finditer(words) if not P._ly_field(words, m.start())]
+    if not hits or (not field and len(hits) > 1):
+        return None
+    return float(re.match(r"\d[\d,]*(?:\.\d+)?", hits[0].group()).group().replace(",", ""))
+
+
 def reread(row, entries=None) -> dict:
     """{field: value} the current parser reads differently from what's stored,
     or {} when neither the yield nor last year's yield would change. A report
@@ -92,7 +118,7 @@ def reread(row, entries=None) -> dict:
     entries = _entries(row) if entries is None else entries
     if entries:
         # its own entry by hash: two fields of one report can share a yield
-        # ("43 acres made 48 bpa vs 63 ... 115 acres made 48 bpa vs 59")
+        # ("40 acres made 50 bpa vs 61 ... 90 acres made 50 bpa vs 57")
         m = next((m for part, m in entries if entry_hash(row, part) == row["dedup_hash"]), None)
         if m is None:
             m = next((m for _, m in entries if _same(m["yield_bpa"], row["yield_bpa"])
@@ -116,6 +142,7 @@ def row_checks(df: pd.DataFrame) -> pd.DataFrame:
     out["_entries"] = entries
     out["_reread"] = [reread(r, e) for r, e in zip(recs, entries)]
     out["_split"] = [P.split_by_crop(r["raw_text"] or "", r["crop"]) for r in recs]
+    out["_field"] = [field_of(r, e) for r, e in zip(recs, entries)]
     return out
 
 
@@ -161,8 +188,9 @@ def _place_key(loc) -> str:
 def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
     """Add review_flags (codes), suggestion ({field: value} or None), dup_of (other
     hashes), decision and approved_flags (what a person decided), status (clean |
-    flagged | approved | excluded | superseded) and in_analysis (counts in
-    averages and charts)."""
+    flagged | approved | excluded | superseded), in_analysis (counts in
+    averages and charts) and field ("3 of 4: 40a 52bpa ...": which field a row
+    is when its report gives several, each stored as its own report)."""
     out = df.copy()
     n = len(out)
     flags = [[] for _ in range(n)]
@@ -180,6 +208,7 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
             siblings.setdefault(k, []).append(out["dedup_hash"].iloc[i])
     records = out.to_dict("records")
     by_hash = {r["dedup_hash"]: r for r in records}
+    fields = [r["_field"] if "_field" in r else field_of(r) for r in records]
 
     for i, r in enumerate(records):
         if gone[i]:
@@ -221,7 +250,10 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
             elif ((r["crop"] == "Corn" and not CORN_RANGE[0] <= y <= CORN_RANGE[1])
                   or (r["crop"] == "Soybeans" and y < SOY_RANGE[0])):
                 flags[i].append("range")
-        changed = r["_reread"] if "_reread" in r else reread(r)
+        # one of several rows of a text the parser no longer splits (split by an
+        # older rule, or by hand): its whole-report reading isn't this row's
+        changed = {} if (not entries and len(mine) > 1) else (
+            r["_reread"] if "_reread" in r else reread(r))
         if changed:
             flags[i].append("reread")
             fix.update(changed)
@@ -241,11 +273,15 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
             hashes = dict(zip(members, out.loc[members, "dedup_hash"]))
             practice = {idx: _practice(out.loc[idx]) for idx in members}
             text = {idx: out.at[idx, "raw_text"] for idx in members}
+            acres = {idx: field_acres(records[pos[idx]], fields[pos[idx]]) for idx in members}
             for idx in members:
                 # entries of one report (one text) aren't each other's duplicate, nor
-                # are dryland and irrigated reports of one place's harvest
+                # are dryland and irrigated reports of one place's harvest, nor fields
+                # of different sizes ("40a 52bpa" in one report, "80 acres went 52" in
+                # another): a field reported twice names the same acres
                 twins = [hashes[o] for o in members if o != idx and text[o] != text[idx]
-                         and not (practice[idx] and practice[o] and practice[idx] != practice[o])]
+                         and not (practice[idx] and practice[o] and practice[idx] != practice[o])
+                         and not (acres[idx] and acres[o] and acres[idx] != acres[o])]
                 if twins:
                     flags[pos[idx]].append("duplicate")
                     dup_of[pos[idx]] = twins
@@ -268,6 +304,8 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
     out["approved_flags"] = approved_flags
     out["status"] = status
     out["in_analysis"] = out["status"].isin(["clean", "approved"]) & out["yield_bpa"].notna()
+    # which field a row is, when its report gives several: "3 of 4: 40a 52bpa ..."
+    out["field"] = [f"{f[0]} of {f[1]}: {f[2]}" if f else None for f in fields]
     return out
 
 

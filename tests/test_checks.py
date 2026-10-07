@@ -184,6 +184,27 @@ twins = checks.entry_rows(row("Saline Co, NE 40 acres made 48 bpa vs 60 bpa last
 check("two fields with one yield: each re-read as itself, not the first with that yield",
       ([t["ly_yield"] for t in twins], checks.run(pd.DataFrame(twins), {})["review_flags"].tolist()),
       ([60, 55], [[], []]))
+# each split row says which field it is; one yield in two reports is a duplicate only
+# when the fields name the same acres (or don't say)
+pair = checks.entry_rows(row("Saline Co, NE: 120a 50bpa vs. 55bpa in 2024. 40a 52bpa vs. "
+                             "60bpa in 2024.", crop="Soybeans", state="NE", location="Saline Co"))
+apart = row("Saline Co, NE: 80 acres went 52. Dry finish.", crop="Soybeans", state="NE",
+            location="Saline Co")
+po = checks.run(pd.DataFrame(pair + [apart]), {})
+check("each split row names its field, in its own words; a whole report has none",
+      [f if isinstance(f, str) else None for f in po["field"]],
+      ["1 of 2: 120a 50bpa vs. 55bpa in 2024.",
+                             "2 of 2: 40a 52bpa vs. 60bpa in 2024.", None])
+check("fields of different acres with one yield aren't duplicates",
+      po["review_flags"].tolist(), [[], [], []])
+same_acres = row("Saline Co, NE: 40 acres went 52 on the hill.", crop="Soybeans", state="NE",
+                 location="Saline Co")
+check("...the same acres are", checks.run(pd.DataFrame(pair + [same_acres]), {})
+      ["review_flags"].tolist(), [[], ["duplicate"], ["duplicate"]])
+unsaid = row("Saline Co, NE: beans went 52 on the hill.", crop="Soybeans", state="NE",
+             location="Saline Co")
+check("...and so are reports that name no acres", checks.run(pd.DataFrame(pair + [unsaid]), {})
+      ["review_flags"].tolist(), [[], ["duplicate"], ["duplicate"]])
 moved = [dict(old_halves[0], yield_bpa=70.0, aph=57.0), old_halves[1]]
 check("...but not when a person changed its yield",
       checks.run(pd.DataFrame(moved), {}).loc[0, "suggestion"]["updates"], {})
