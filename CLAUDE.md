@@ -118,8 +118,28 @@ checks (re-read, split, entries) are computed once with the cached reports
 separated and both included"; "this had multiple entries, we need to add each one").
 About half the reports are keyed in by JSA, half come from Garrett; both carry these.
 `split_entries` cuts a report wherever an acreage ("40 acres", "40 ac at", "270a",
-"160 A") or a practice ("dryland", "non-irrigated", "irrigated"; "non- irrigated"
-wrapped by a PDF; never "pivot", which can mark dryland corners) is named. A piece
+"160 A", "600 custom acres") or a practice ("dryland", "non-irrigated", "irrigated";
+"non- irrigated" wrapped by a PDF; never "pivot", which can mark dryland corners) is
+named, and (Kolten, 2026-10-07, fields without acres: "make this each an entry")
+wherever a field is named another way: a designator ("1st field", "Second field",
+"One quarter", "another farm", "Other fields", "next field", "Different producer",
+"same farmer", "Field #2", "1 field"; not "same field", a comparison, nor "same farm":
+"the same farm I reported beans from"), an ordinal with its figure ("another 40",
+"2nd 61", "third running about 58"), a numbered or lettered item ("1.)", "2)", "A.)"),
+ground named at a clause start ("Sandy ground made 200 bpa. Good ground made 240"),
+a corn maturity with its own yield ("105 day corn went 220 dry, 112 day went 238";
+not "the 108 day I planted was 240"), and each figure of a list: figures with only
+commas, "and", crop words, a field's APH or prior year, or "on two fields" between
+("4 fields made 215 bpa, 228 bpa, 236 bpa", "200 bpa corn 228 bpa corn", "176 bpa corn,
+aph is 210 188 bpa corn", "205 bpa vs 150 LY 228 bpa vs 230 LY"; a list naming its unit
+once, "Field avg 70, 74, 77 bpa", gets it on each figure first, `_unitize`). Not a list:
+"Standing corn 235, downed corn 160" (parts of one field), a closing average ("58 vs 66
+last year and 61 bpa avg"). A figure before the first cut is the first field's when a
+designator that continues one follows (another, other, second, next, different, same
+farmer: "52 bpa 58 aph, same farmer 61 bpa"), unless the lead calls it an average
+("running 250 bpa avg ... one field 260, another field 270" stays one report). A
+report saying a field "pulled the yield down" stays whole: that field is part of the
+average. 98 stored reports split this way on 2026-10-07 (248 rows). A piece
 with no figure goes with a neighbour: naming the practice of the entry before it, it's
 that entry's remark ("... and the non-irrigated average last year"); anything
 else opens the next entry; the last closes the last. An entry's practice is the one it
@@ -389,6 +409,17 @@ acres" is still 205). A yield check is the expectation ("vs a mid-Aug yield chec
 ("200 bpa vs 185 bpa APH" read as 185–200) and a field APH stated after the yield could
 be read as the yield; stored ranges weren't rewritten, `reread` only flags a changed
 yield or last year.
+What isn't this season's yield, besides the above: a yardstick ("normal is 210",
+"Ten-year avg is 65", "typically run 60-65", "225bpa 10-year average", "45 bpa
+trendline"), a record on the books ("the record for that field is 72", "my record yield
+of 83", "previous record was 225"; "a record 268" is this year's), a change written with
+a sign ("-15bpa from last season"), a hope ("Hopes the better ground will be 210",
+"estimates should average 68", "would have been 72"; but "total average will be 58" is
+the result), a thousands group ("38,250 bushels"). Read as yields: "62½ BPA", "2nd 61",
+"field #3 41.5", "second field 52". The prior year of a like field includes "two years
+ago" and "Same field in 2023 made 76" (right before the figure only: "in 2023 Early
+beans running 70" isn't); "vs 205 two years ago, 60 ac at 118" closes the comparison
+with 205, so 118 stays this year's (`_CLOSES_COMPARISON`).
 PDF lines opening "Place Co, ST ..." or "Town, ST ..." (comma, no separator) start
 a report; "Polk Co – ..." with no state starts one in the previous report's state.
 

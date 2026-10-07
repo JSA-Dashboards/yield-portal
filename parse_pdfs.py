@@ -150,11 +150,44 @@ def is_continuation(line):
 # prefix captures ranges ("225-230 bpa"). "230 dry" means 230 bu dry.
 # (?<![/\d]) keeps a date out of a range: "planted 4/12 – 241 bu/acre" is 241,
 # not 12-241. (?<!\d\.) skips the tail of a decimal but still reads "vs.73 bpa".
+# (?<!\d,) keeps a thousands group out ("38,250 bushels for 58.4bpa" is not 250 bpa);
+# group 3 is a vulgar fraction: "62½ BPA", "48 ½ BPA".
 YIELD_RE = re.compile(
-    r"(?:(?<![/\d])(?<!\d\.)(\d{2,3})\s*(?:-|–|to)\s*)?(?<![/\d])(?<!\d\.)(\d{2,3}(?:\.\d+)?)"
+    r"(?:(?<![/\d])(?<!\d\.)(?<!\d,)(\d{2,3})\s*(?:-|–|to)\s*)?"
+    r"(?<![/\d])(?<!\d\.)(?<!\d,)(\d{2,3}(?:\.\d+)?)(?:\s?([½¼¾]))?"
     r"\+?\s*-?\s*"
     r"(?:bpa|bu(?:shels?)?(?:\s*/\s*ac(?:re)?|\s+per\s+acre)?|dry)\b",   # "80+ bpa", "214-BPA"
     re.IGNORECASE)
+_FRACTION = {"½": 0.5, "¼": 0.25, "¾": 0.75}
+# A list whose unit comes once, at the end: "Field avg 70, 74, 77 bpa", "71 and 75
+# bpa". Its other figures must be near the last one (a date in "Sept 21, 240 bpa" isn't).
+_LIST_RUN = re.compile(
+    r"(?<![\d.,/])((?:\d{2,3}(?:\.\d+)?\s*(?:,|&|\band\b)\s*)+)(\d{2,3}(?:\.\d+)?)(?:\s?[½¼¾])?\s*"
+    r"(bpa|bu\b|bushels?\b)", re.I)
+_MONTH_END = re.compile(r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*$", re.I)
+
+
+def _list_figures(text):
+    """[(start, end, value, unit)] for the unit-less figures of a list that names its
+    unit once."""
+    out = []
+    for m in _LIST_RUN.finditer(text):
+        last = float(m.group(2))
+        for n in re.finditer(r"\d{2,3}(?:\.\d+)?", m.group(1)):
+            v, s = float(n.group()), m.start(1) + n.start()
+            if abs(v - last) <= 0.5 * last and not _MONTH_END.search(text[max(0, s - 12): s]):
+                out.append((s, s + len(n.group()), v, m.group(3)))
+    return out
+
+
+def _unitize(text):
+    """"70, 74, 77 bpa" -> "70 bpa, 74 bpa, 77 bpa": each figure of such a
+    list carries the unit, so one cut from the list still reads as a yield."""
+    out, last = [], 0
+    for s, e, _, unit in _list_figures(text):
+        out += [text[last:e], " " + unit]
+        last = e
+    return "".join(out) + text[last:]
 # A road number is not a yield: "along Hwy 30- 66 bpa" is 66.
 _ROAD = re.compile(r"(?:hwy|highway|route|rte|interstate|i-)\s*$", re.I)
 # Context classifiers. A line usually mixes this year's yield with last year's,
@@ -173,17 +206,29 @@ _POST_DELTA = re.compile(    # "10bpa behind last year" is a difference, not LY 
 # is this year's, compared to last year).
 _COMPARE = (r"above|below|better|worse|over|under|than|higher|lower|compared|vs|"
             r"versus|from|off|up|down|same|as|like|similar|to|of|behind|ahead")
+# The figure a reporter compares with is the prior year a like field grew the crop:
+# with rotation that's often two seasons back (Kolten, 2026-10-07), so "two years ago"
+# and "in 2023" count like "last year" ("vs 205 two years ago", "Same field in 2023
+# made 76").
 _LY_POST = re.compile(
     r"^[^\w.]{0,3}(?:(?!(?:%s)\b)[A-Za-z]+\s+){0,2}?(last year|ly\b|a year ago|"
-    r"year ago|prior year|in 20\d\d|last yr)" % _COMPARE, re.I)
+    r"years? ago|prior year|in 20\d\d|last yr)" % _COMPARE, re.I)
 # "vs 76 last year" / "vs 62 ly" / "vs. 55bpa last year" -> last-year yield
 LY_VS_RE = re.compile(
     r"\bvs\.?\s+(\d{2,3}(?:\.\d+)?)\s*(?:bpa|bu\w*(?:/ac\w*)?)?\s*"
-    r"(?:last year|ly\b|a year ago|in 20\d\d)", re.I)
-_LY_WORDS = re.compile(r"last year|\bly\b|last yr|a year ago|prior year", re.I)
+    r"(?:last year|ly\b|a year ago|(?:two|2) years ago|in 20\d\d)", re.I)
+_LY_WORDS = re.compile(r"last year|\bly\b|last yr|a year ago|years ago|prior year|\bin 20\d\d\b",
+                       re.I)
 _COMPARE_BEFORE = re.compile(
     r"(?:than|vs\.?|versus|from|over|under|above|below|as|to|like|"
     r"compared(?:\s+(?:to|with))?)\s*$", re.I)
+
+
+# "vs 205 two years ago, 60 ac at 118 bpa": the "years ago" closes the comparison with
+# 205; it says nothing about the 118 after it.
+_CLOSES_COMPARISON = re.compile(
+    r"(?:vs\.?|versus|than|compared\s+(?:to|with)|from)\s+\d{2,3}(?:\.\d+)?\s*(?:bpa|bu\w*)?\s*"
+    r"(?:[a-z]+\s+)?$", re.I)
 
 
 def _ly_before(before):
@@ -195,9 +240,11 @@ def _ly_before(before):
     if not hits:
         return False
     m = hits[-1]
-    if _COMPARE_BEFORE.search(sent[:m.start()]):
+    if _COMPARE_BEFORE.search(sent[:m.start()]) or _CLOSES_COMPARISON.search(sent[:m.start()]):
         return False
     gap = len(sent) - m.end()
+    if m.group().lower().startswith("in 20"):        # "Same field in 2023 made 76": right before it
+        return gap <= 12
     opens_sentence = not sent[:m.start()].strip()
     return gap <= 25 or (opens_sentence and gap <= 55)
 
@@ -215,7 +262,8 @@ LY_TAIL_RE = re.compile(
 # (?!\d) stops \d{2,3} backtracking to "10" of "100%", and (?!\.\d) — not
 # (?![\d.]) — still lets "expected 40." end a sentence.
 _EXP_POST = re.compile(
-    r"^\W{0,3}(expect\w*|estimat\w*|target\w*|budget\w*)\b"
+    r"^[^\w.]{0,3}(expect\w*|estimat\w*|target\w*|budget\w*|trend\w*|"      # not past a full stop
+    r"(?:\d+|five|ten)[- ]?year\s+(?:avg|average))\b"           # "230bpa 10-year average"
     r"(?!\W{0,3}\d{2,3}(?:\.\d+)?(?!\d)(?!\.\d)(?!\s*%))", re.I)
 # What the farmer thought it would make is an expectation too: "Producer a bit
 # surprised, thought it was 215" (the verb is optional here because a bare
@@ -224,9 +272,27 @@ _THOUGHT = (r"(?:thought|figured|guessed)(?:\s+(?:it|they|we|he|she))?"
             r"(?:\s+(?:was|were|would be|'d be|would make|would go|would run|might be|could be))?")
 # A yield check is an estimate made before harvest: "190 bpa vs a mid-Aug yield check
 # at 215 bpa", "field checked in July at 230bpa".
-_EXP_PRE = re.compile(r"(expect\w*|hop\w* (?:for|to)|%s|yield\s+checks?(?:\s+(?:at|of|was|were|"
-                      r"showed|said))?|checked\s+(?:in|on|during)\s+\w+\s+(?:at|of))\W{0,10}$"
+# What a field or area normally makes is a yardstick, not a yield: "Normal is 210 bu",
+# "Ten-year avg is 65 bpa", "Typically run 60-65 bpa in that area".
+_EXP_PRE = re.compile(r"(expect\w*(?:\s+(?:near|about|around|close to|roughly))?|hop\w* (?:for|to)|"
+                      r"%s|yield\s+checks?(?:\s+(?:at|of|was|were|showed|said))?|"
+                      r"checked\s+(?:in|on|during)\s+\w+\s+(?:at|of)|"
+                      r"(?:typically|usually|normally)(?:\s+\w+)?|normal\s+(?:is|was|of)|"
+                      r"(?:would|could|should)\s+have\s+been(?:\s+(?:about|around|near|over))?|"
+                      r"(?:\d+|five|ten)[- ]?year\s+(?:avg|average)(?:\s+(?:is|was|of))?)\W{0,10}$"
                       % _THOUGHT, re.I)
+# A hope or a guess about what's coming: "Hopes the better ground will be 210 bpa",
+# "farmer estimates should average 68 BPA" (but "total average will be 58 bpa" is the
+# result).
+_HOPE_WILL = re.compile(
+    r"\b(?:hop\w*|think\w*|thought|believ\w*|estimat\w*|guess\w*|expect\w*|figur\w*)\b[^.\d]{0,40}?"
+    r"\b(?:will|should|would|could|might)\s+(?:be|average|make|run|go)"
+    r"(?:\s+(?:about|around|near|over|up around))?\W{0,10}$", re.I)
+# A record already on the books is a past yield: "the record for that field is 72 bu",
+# "my record yield of 83.2", "previous record was 225 bpa" ("a record 268" is this year's).
+_PAST_RECORD = re.compile(
+    r"\b(?:previous|prior|old|former|past|my|our|his|their|the)\s+(?:\w+\s+)?record\b[^.\d]{0,30}$",
+    re.I)
 # ...but "better than expected 140 bpa" is a finished comparison: 140 is the
 # yield; so is "better than we thought 140 bpa".
 _EXP_DONE = re.compile(r"\b(?:than|as)\s+(?:expected|(?:\w+\s+)?thought)\W{0,3}$", re.I)
@@ -245,8 +311,10 @@ _DIFF_POST = re.compile(
 # The APH is not a yield, before or after its figure: "APH 65 bpa", "APH was 42 bpa",
 # "vs 65 bpa APH" — but in "231 bpa aph 210" the figure after "aph" is the APH.
 _APH_NUM_AFTER = r"\s*(?:is|was|of|at|=|:)?\s*\d{2,3}(?:\.\d+)?(?!\d)(?!\s*(?:acres?\b|ac\b|a\b))"
-_APH_PRE = re.compile(r"aph\b(?:\s*(?:is|was|of|at|=|:)\s*)?(?:about\s+|around\s+)?\W{0,8}$", re.I)
-_APH_POST = re.compile(r"^\s*(?:(?:bpa|bu\w*(?:/ac\w*)?)\s*)?aph\b(?!%s)" % _APH_NUM_AFTER, re.I)
+_APH_PRE = re.compile(r"aph\b(?:\s+on\s+(?:these|the|this|that)\s+fields?)?"
+                      r"(?:\s*(?:is|was|of|at|=|:))?(?:\s*(?:about|around|near))?\W{0,8}$", re.I)
+_APH_POST = re.compile(r"^\s*(?:(?:bpa|bu\w*(?:/ac\w*)?|average|avg)\s*)?aph\b(?!%s)" % _APH_NUM_AFTER,
+                       re.I)
 
 
 # What must NOT follow a bare yield number: moisture/acres/maturity/test-weight
@@ -261,9 +329,10 @@ _NOT_YIELD_TAIL = (    # (?!\.\d) not (?![\d.]): "corn avg 238." ends a sentence
 # "LY was 259", "in the 190 range". Only consulted when no unit-bearing current
 # yield was found.
 BARE_YIELD_RE = re.compile(
-    r"\b(?:went|made|averag(?:ed|ing)|avg|yielded|came in at|running|ran|did|"
+    r"(?:\b(?:went|made|averag(?:ed|ing)|avg|yielded|came in at|running|ran|did|"
     r"making|was|yields?(?:\s+of)?|in the|"
-    r"estimate[ds]?|apprais(?:ed|ing|al)(?:\s+(?:at|of))?)\s+"     # "silage estimate 218"
+    r"2nd|3rd|[4-9]th|second|third|fourth|fifth|fields?|farms?|quarters?|"  # "2nd 61", "second field 52"
+    r"estimate[ds]?|apprais(?:ed|ing|al)(?:\s+(?:at|of))?)|#\d)\s+"   # "silage estimate 218", "#3 41.5"
     r"(?:about\s+|around\s+|right at\s+|roughly\s+)?"
     r"(\d{2,3}(?:\.\d+)?)(?:\s*(?:-|–|to)\s*(\d{2,3}(?:\.\d+)?))?" + _NOT_YIELD_TAIL,
     re.I)
@@ -292,13 +361,18 @@ def _classify(text, start, end, val, cur, ly, exp, lo=None):
         return
     if _APH_PRE.search(before) or _APH_POST.match(after):
         return
+    if _PAST_RECORD.search(re.split(r"[.;]\s", long_before)[-1]):
+        return
+    if re.search(r"(?:^|[\s(])[-+−]$", before):     # "-15bpa from last season": a change, not a yield
+        return
     ly_after = _LY_POST.match(after)
     if ly_after and _LY_LEADS.match(text[end + ly_after.end(): end + ly_after.end() + 45]):
         ly_after = None
     if ly_after or _ly_before(long_before):
         ly.append(val)
         return
-    if _EXP_POST.match(after) or (_EXP_PRE.search(before) and not _EXP_DONE.search(before)):
+    if (_EXP_POST.match(after) or (_EXP_PRE.search(before) and not _EXP_DONE.search(before))
+            or _HOPE_WILL.search(re.split(r"[.;]\s", long_before)[-1])):
         exp.append(val)
         return
     if not (10 <= val <= 400):
@@ -308,16 +382,37 @@ def _classify(text, start, end, val, cur, ly, exp, lo=None):
     cur.append(val)
 
 
-def extract_yields(text):
-    """-> (current, last_year, expected) lists of bu/ac values."""
-    cur, ly, exp = [], [], []
+def _figures(text):
+    """[(start, end, value, low of a range)] for every figure with a yield unit, the
+    unit-less ones of a list that names it once included, in the order they come."""
+    out = []
     for m in YIELD_RE.finditer(text):
         if _ROAD.search(text[max(0, m.start(2) - 12): m.start(2)]):
             continue
         lo = float(m.group(1)) if m.group(1) else None
         if lo is not None and _ROAD.search(text[max(0, m.start(1) - 12): m.start(1)]):
             lo = None
-        _classify(text, m.start(), m.end(), float(m.group(2)), cur, ly, exp, lo)
+        out.append((m.start(), m.end(), float(m.group(2)) + _FRACTION.get(m.group(3) or "", 0), lo))
+    out += [(s, e, v, None) for s, e, v, _ in _list_figures(text)]
+    return sorted(out, key=lambda f: (f[0], f[1]))
+
+
+def _current_spans(text):
+    """(start, end) of each figure that reads as this season's yield."""
+    out = []
+    for s, e, v, lo in _figures(text):
+        cur = []
+        _classify(text, s, e, v, cur, [], [], lo)
+        if cur:
+            out.append((s, e))
+    return out
+
+
+def extract_yields(text):
+    """-> (current, last_year, expected) lists of bu/ac values."""
+    cur, ly, exp = [], [], []
+    for s, e, v, lo in _figures(text):
+        _classify(text, s, e, v, cur, ly, exp, lo)
     for m in PRE_UNIT_RE.finditer(text):
         _classify(text, m.start(), m.end(), float(m.group(1)), cur, ly, exp)
     if not ly:
@@ -437,9 +532,10 @@ def split_by_crop(text, default_crop=None):
 # A figure before "APH" is the APH ("vs 60 bpa APH", "vs. 58.5bpa APH") unless "APH"
 # names its own: in "90 acres 228 bpa aph 205" 228 is the yield. "(205 APH) 2. 150
 # acres" is still 205: a list number or an acreage after it isn't an APH.
-APH_RE = re.compile(
-    r"\baph\b[^\d.]{0,14}?(\d{2,3}(?:\.\d+)?)"
-    r"|(?<![\d.])(\d{2,3}(?:\.\d+)?)\s*(?:(?:bpa|bu(?:/ac\w*)?)\s*)?aph\b(?!%s)" % _APH_NUM_AFTER,
+APH_RE = re.compile(     # also "APH on these fields is 205", "(All at 180 average APH)"
+    r"\baph\b(?:\s+on\s+(?:these|the|this|that)\s+fields?)?[^\d.]{0,14}?(\d{2,3}(?:\.\d+)?)"
+    r"|(?<![\d.])(\d{2,3}(?:\.\d+)?)\s*(?:(?:bpa|bu(?:/ac\w*)?|average|avg)\s*)?aph\b(?!%s)"
+    % _APH_NUM_AFTER,
     re.IGNORECASE)
 
 # Maturity, read the way each crop reports it, kept as text so ranges survive:
@@ -493,9 +589,74 @@ _PRACTICE_RE = re.compile(
     r"(?P<non>dry\s?land|non[- ]{0,2}irrigat\w*|not irrigat\w*|rain[- ]?fed)"
     r"|(?P<irr>(?<!non-)(?<!non )(?<!non- )(?<!not )\birrigat\w*\b(?!\s+yields))", re.I)
 # An acreage opens a field's entry: "40 acres", "a 40 acre field", "40 ac at 140",
-# "270a went", "160 A 71.4" (but not "248 A lot of...").
+# "270a went", "160 A 71.4", "600 custom acres" (but not "248 A lot of...").
 _ACRES_RE = re.compile(
-    r"(?<![\d.,])\d{1,3}(?:,\d{3})*(?:\.\d+)?(?:\s*(?:acres?|ac)\b|a\b|\s+a\b(?!\s+[a-z]))", re.I)
+    r"(?<![\d.,])\d{1,3}(?:,\d{3})*(?:\.\d+)?"
+    r"(?:\s*(?:acres?|ac)\b|\s+[a-z]+\s+acres?\b|a\b|\s+a\b(?!\s+[a-z]))", re.I)
+
+# --- fields named without acres (Kolten, 2026-10-07: "make this each an entry") -------
+_FIELD_WORDS = r"(?:fields?|farms?|quarters?|pieces?)"
+_WHO = r"(?:producers?|growers?|farmers?|customers?)"
+# "1st field", "Second field", "One quarter", "another farm", "Other fields", "next
+# field", "Different producer", "same farmer", "Field #2", "1 field". ("Same field" is a
+# comparison, not another field.)
+_DESIGNATOR = re.compile(
+    r"\b(?:(?P<word>1st|2nd|3rd|[4-9]th|first|second|third|fourth|fifth|sixth|seventh|eighth|"
+    r"another|other|next|different|one|1)\s+(?:[\w.'’-]+\s+){0,2}?(?:%s|%s)\b"
+    r"|(?P<same>same)\s+%s\b|(?:field|farm)\s*#\s*\d)" % (_FIELD_WORDS, _WHO, _WHO), re.I)
+# These continue a field named before them: a figure ahead of the first of them is
+# that first field's ("52 bpa 58 aph, same farmer 61 bpa 60 aph").
+_CONTINUES = {"another", "other", "next", "different", "same", "second", "2nd", "third", "3rd",
+              "fourth", "4th", "fifth", "5th", "sixth", "6th", "seventh", "7th", "eighth", "8th", "9th"}
+# A field by its ordinal alone: "another 230 bpa", "Cut another 40 and they did 41",
+# "1 field 62 bpa, 2nd 60 and 3rd 55".
+_ORDINAL_FIGURE = re.compile(   # ... "and third running about 58"
+    r"\b(another|2nd|3rd|[4-9]th|second|third|fourth|fifth)\s+"
+    r"(?=(?:(?:running|went|made|did|at|about|around)\s+){0,2}\d{2,3}(?![\d,]))", re.I)
+# A corn maturity with its own yield: "105 day corn went 220 dry, 112 day went 238 dry"
+# (not "the 108 day I planted was 240", last year's).
+_MATURITY_FIELD = re.compile(
+    r"\b(?:7\d|8\d|9\d|1[01]\d|12[0-5])[- ]?day\b(?=(?:\s+corn)?"
+    r"(?:\s+planted\s+[a-z]+\.?\s+\d{1,2}(?:st|nd|rd|th)?)?"
+    r"\s*(?:made|went|did|yielded|averaged|ran|running|=|:)\s*\d)", re.I)
+# Ground named for a field: "Sandy ground made 200 bpa. Good ground made 240 bpa".
+_SOIL_FIELD = re.compile(
+    r"\b(?:sandy|sand|light|lighter|heavy|heavier|good|better|poor|poorer|rough|black|white|"
+    r"clay|timber|bottom|hill|prime|marginal)\s+(?:ground|dirt|soils?)\b", re.I)
+# A numbered or lettered item: "1.)", "2)", "3. ", "A.)", "B)".
+_ITEM = re.compile(r"(?<![\w.,/#])(?:[1-9](?:\.\)|\)|\.(?=\s))|[A-F](?:\.\)|\)))")
+# A field that pulled the average down is part of that average, not a report of its own.
+_PART_OF_AVG = re.compile(r"\b(?:pulled|brought|dragged|dropped)\s+(?:the|our|his|their)\s+"
+                          r"(?:\w+\s+)?(?:yield|average|avg)\s+down\b", re.I)
+# What may sit between two figures of a list: commas, "and", crop words, a field's APH,
+# "on two fields" ("62 bpa on two fields, 70 bpa on one field, 84 bpa ...").
+_GLUE = re.compile(      # ... and a field's prior year: "205 bpa vs 150 LY 228 bpa vs 230 LY"
+    r"\(?\s*(?:vs\.?\s+)?(?:aph\s*(?:is|of|=|:)?\s*\d{2,3}(?:\.\d+)?|\d{2,3}(?:\.\d+)?\s*(?:bpa\s*)?aph)"
+    r"\s*\)?|(?:vs\.?\s+)?\d{2,3}(?:\.\d+)?\s*(?:bpa\s*)?(?:ly|last year)\b"
+    r"|\b(?:on|across|from)\s+(?:one|another|the other|two|three|four|\d)\s+(?:\w+\s+)?"
+    r"(?:fields?|farms?)\b|\b(?:and|corn|beans?|soybeans?|bpa|bu)\b|[,;&()\s.\-–]", re.I)
+
+
+def _list_cuts(text):
+    """Where each figure of a list starts: two of this season's figures with nothing
+    but list glue between them ("4 fields made 215 bpa, 228 bpa, 215 bpa, 236 bpa")."""
+    spans, out = _current_spans(text), set()
+    for (s1, e1), (s2, e2) in zip(spans, spans[1:]):
+        # an average closing the list sums it up ("58 bpa vs 66 bpa last year and 61 bpa
+        # avg"); "79 bpa avg 11.5% moisture" is the moisture's
+        if re.match(r"\s*(?:avg|ave|average)\b(?!\s+\d{1,2}(?:\.\d+)?\s*%)", text[e2:], re.I):
+            continue
+        if not _GLUE.sub("", text[e1:s2]).strip():
+            out.update((s1, s2))
+    return out
+
+
+def _clause_start(text, at, floor=0):
+    """Where the clause holding `at` begins (after ". ", ": ", ", " ...), not before
+    `floor`."""
+    k = max([text.rfind(p, floor, at) + len(p) for p in (". ", "; ", ": ", ", ", " - ", " – ")
+             if text.rfind(p, floor, at) >= 0] + [floor])
+    return k
 
 
 def _practice_of(m):
@@ -517,6 +678,8 @@ def _ly_field(text, at):
     if not near:
         return False
     start = max(0, at - 25) + near[-1].start()
+    if re.search(r"[.;!?]\s", text[start: at]):     # "...not two years ago. 40 acres did"
+        return False
     clause = re.split(r"[.;:,!?]\s", text[:start])[-1]
     return not re.search(r"\d", clause)
 
@@ -537,11 +700,29 @@ def split_entries(text):
     named inside the entries, or a state in full after the report's own place
     before them (several reports run into one line: "Town, MN ... NE Iowa beans
     100 acres 50 bushel"), or when fewer than two entries carry a yield."""
-    text = text or ""
+    text = _unitize(text or "")
+    if FARM_AVG_RE.search(text) or _PART_OF_AVG.search(text):
+        return None
     # last year's field is a remark, not an entry (_ly_field)
     cuts = {m.start(): None for m in _ACRES_RE.finditer(text) if not _ly_field(text, m.start())}
+    continues = set()
+    for m in _DESIGNATOR.finditer(text):
+        cuts.setdefault(m.start(), None)
+        if (m.group("word") or m.group("same") or "").lower() in _CONTINUES:
+            continues.add(m.start())
+    for m in _ORDINAL_FIGURE.finditer(text):
+        cuts.setdefault(m.start(), None)
+        continues.add(m.start())
+    for m in _SOIL_FIELD.finditer(text):      # opening a clause, not "(on some white dirt)"
+        if text[m.start()].isupper() or re.search(r"(?:^|[.;:,!?(\-–]\s*)$", text[:m.start()]):
+            cuts.setdefault(m.start(), None)
+    for rx in (_MATURITY_FIELD, _ITEM):
+        for m in rx.finditer(text):
+            cuts.setdefault(m.start(), None)
+    for at in _list_cuts(text):
+        cuts.setdefault(at, None)
     cuts.update({m.start(): _practice_of(m) for m in _PRACTICE_RE.finditer(text)})
-    if not cuts or FARM_AVG_RE.search(text):
+    if not cuts:
         return None
     starts = sorted(cuts)
     lead = text[:starts[0]]
@@ -549,8 +730,23 @@ def split_entries(text):
     if own:      # "NC Nebraska", "SE Iowa": a region of one state, one place
         region = re.match(r"\s+(?:%s)\b" % _FULL, lead[own.end():], re.I)
         own_end = own.end() + (region.end() if region else 0)
-    if extract_yields(lead)[0] or (own and _STATE_FULL.search(lead, own_end)):
+    if own and _STATE_FULL.search(lead, own_end):
         return None
+    if extract_yields(lead)[0]:
+        # A figure before the first cut is the first field's when another field, the
+        # same farmer or a different farm follows ("52 bpa 58 aph, same farmer 61 bpa
+        # 60 aph"); an average there ("running 250 bpa avg") speaks for them all.
+        if not continues or re.search(r"\bav(?:g|e?rag\w*)\b", lead, re.I):
+            return None
+        floor = 0
+        for s, _ in _current_spans(lead):
+            k = _clause_start(text, s, floor)
+            cuts.setdefault(s if _ENTRY_PLACE.search(text, k, s) else k, None)
+            floor = s
+        starts = sorted(cuts)
+        lead = text[:starts[0]]
+        if extract_yields(lead)[0]:
+            return None
     entries, practices, pending = [], [], ""
     for i, (a, b) in enumerate(zip(starts, starts[1:] + [len(text)])):
         piece = text[a:b]

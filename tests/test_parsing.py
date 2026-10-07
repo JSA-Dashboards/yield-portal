@@ -113,6 +113,49 @@ check("a yield check is an estimate", (rows[0]["yield_max"], rows[0]["expected_y
 rows = email("YIELD: SE Iowa beans", "SE Iowa beans 120 acres 60 bpa. Irrigated. 80 acres 55 bpa.")
 check("a region of one state ('SE Iowa') before the fields is one place: a report per field",
       [r["yield_bpa"] for r in rows], [60, 55])
+# fields named without acres, a report each (Kolten, 2026-10-07: "make this each an entry")
+for label, body, crop, want in (
+        ("a counted list, one unit each", "Polk Co, IA: 3 small fields: 58 BPA, 64 BPA, 60½ BPA (61 APH).",
+         "beans", [58, 64, 60.5]),
+        ("a list naming its unit once", "Polk Co, IA: Field avg 60, 62, 65 bpa. Typically run 55 bpa here.",
+         "beans", [60, 62, 65]),
+        ("ordinal fields", "Polk Co, IA: One field made 230 bpa vs 220 bpa last year. Second field made "
+         "245 bpa vs 228 bpa last year.", "corn", [230, 245]),
+        ("the same farmer after the first field", "Polk Co, IA: 52 bpa 58 aph, same farmer 61 bpa 60 aph",
+         "beans", [52, 61]),
+        ("ground named for each field", "Polk Co, IA: Sandy ground made 200 bpa. Good ground made 240 bpa",
+         "corn", [200, 240]),
+        ("a maturity each, with its yield", "Polk Co, IA: 105 day corn went 220 dry, 112 day went 238 dry.",
+         "corn", [220, 238]),
+        ("numbered items", "Polk Co, IA: 1.) 230 bpa (210 APH) 2.) 245 bpa (215 APH)", "corn", [230, 245]),
+        ("'another' with its figure", "Polk Co, IA: one field went 205 bpa and another 236 bpa, 21% mst",
+         "corn", [205, 236]),
+        ("portions of one field stay one report", "Polk Co, IA: Standing corn is 235+ bpa, downed corn is "
+         "160 bpa.", "corn", [235]),
+        ("an average ahead of the fields speaks for them", "Polk Co, IA: running 250 bpa avg. Early fields: "
+         "one field 260 bpa, another field 270 bpa.", "corn", [250]),
+        ("a field that pulled the average down is part of it", "Polk Co, IA: 600 acres averaged 62 bpa. One "
+         "farm made 50 bpa, which pulled the yield down.", "beans", [62])):
+    check(f"fields without acres: {label}",
+          [r["yield_bpa"] for r in email(f"YIELD: Polk Co IA {crop}", body)], want)
+rows = email("YIELD: Polk Co IA beans", "Polk Co, IA: 63 bpa - two years ago same field made 72 bpa.")
+check("'two years ago' is the prior year of a like field (rotation)",
+      [(r["yield_bpa"], r["ly_yield"]) for r in rows], [(63, 72)])
+for label, body, want in (
+        ("a normal isn't a yield", "Polk Co, IA: 150 bu for the farm, normal is 210 bu.", ([150], [], [210])),
+        ("nor a ten-year average", "Polk Co, IA: 86 bpa. Ten-year avg is 66 bpa", ([86], [], [66])),
+        ("nor a record on the books", "Polk Co, IA: 62 bu/acre, the record for that field is 71 bu.",
+         ([62], [], [])),
+        ("nor a change", "Polk Co, IA: 70 acres went 219 bpa. -15bpa from last season.", ([219], [], [])),
+        ("nor a thousands group", "Polk Co, IA: 640 acres - 38,250 bushels for 59.8bpa average.",
+         ([59.8], [], [])),
+        ("nor an APH 'near' its figure", "Polk Co, IA: aph near 58 bpa 31 bpa 37 bpa", ([31, 37], [], [])),
+        ("nor a hope", "Polk Co, IA: 140 ac went 115-145 bpa. Hopes the better ground will be 205 bpa.",
+         ([115, 145], [], [205])),
+        ("but 'will be' with no hope is the result", "Polk Co, IA: total average will be 57 bpa.",
+         ([57], [], []))):
+    check(f"figures: {label}", P.extract_yields(body), want)
+
 for label, body in (
         ("a whole-farm average speaks for the fields",
          "Polk Co, IA: 40 acres made 231 bpa, 80 acres made 248 bpa. Farm avg was 242 bpa."),
