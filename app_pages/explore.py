@@ -151,7 +151,7 @@ with left, st.container(border=True):
     st.markdown("**Reported yields by crop year**")
     st.caption("Box = middle half of the reports, line = median; "
                "dots = unusual fields (hail, drought, records).")
-    box = alt.Chart(yields).mark_boxplot(
+    box = alt.Chart(yields[["crop_year", "yield_bpa"]]).mark_boxplot(
         size=34, color=BRAND, outliers={"size": 36, "opacity": 0.55},
     ).encode(
         x=alt.X("crop_year:O", title="Crop year"),
@@ -243,6 +243,7 @@ with st.container(border=True):
         d["crop_year"] = d["crop_year"].astype(int)
         # every year on the same calendar so the panels line up by date
         d["season_day"] = pd.to_datetime(d["date_reported"]).map(lambda x: x.replace(year=2000))
+        d = d[["season_day", "date_reported", "location", "state", "yield_bpa", "crop_year"]]
         st.altair_chart(alt.Chart(d).mark_circle(
             size=64, opacity=0.8, color=BRAND, stroke="#ffffff", strokeWidth=1,
         ).encode(
@@ -255,7 +256,7 @@ with st.container(border=True):
             column=alt.Column("crop_year:O", title=None, sort="descending")))
 
 # --- the reports themselves ---------------------------------------------------
-cols = ["crop_year", "date_reported", "state", "location", "yield_bpa", "ly_yield",
+cols = ["crop_year", "date_reported", "state", "location", "yield_bpa", "field", "ly_yield",
         "vs_ly", "aph", "maturity", "irrigation", "disease", "raw_text", "source", "source_file"]
 table = f[cols].sort_values(["crop_year", "state", "location"],
                             ascending=[False, True, True], na_position="last")
@@ -270,7 +271,12 @@ with st.container(border=True):
             "location": "Location",
             "yield_bpa": st.column_config.NumberColumn(
                 "Yield", format="%.1f",
-                help="Reported yield (bpa); the first figure when a report gives several."),
+                help="Reported yield (bpa): the report's first figure. A report that gives "
+                     "several fields is one row per field."),
+            "field": st.column_config.TextColumn(
+                "Field", width="medium",
+                help="When a report gives several fields: which one this row is, in its own "
+                     "words. The Report column shows the whole text."),
             "ly_yield": st.column_config.NumberColumn("LY", format="%.1f",
                                                       help="Same field, last year"),
             "vs_ly": st.column_config.NumberColumn("Vs LY", format="%+.1f"),

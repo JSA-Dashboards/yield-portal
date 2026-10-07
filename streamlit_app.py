@@ -14,10 +14,32 @@ Access, as in the River FOB portal:
 import hmac
 import os
 import pathlib
+import sys
 
 import streamlit as st
 
 HERE = pathlib.Path(__file__).resolve().parent
+
+
+def _fresh_modules():
+    """Streamlit Cloud pulls each push and re-reads this script and the pages, but
+    keeps the modules it already imported (parse_pdfs, checks, db, ...): a pushed fix
+    to them never ran until a Reboot. On 2026-10-06 the review queue ran the
+    morning's first code all evening, and applying its stale suggestions wrote
+    wrong figures. So: whenever one of this app's .py files changes (and once per
+    process), forget this app's modules; the imports below load them as pushed."""
+    seen = tuple(sorted((p.name, p.stat().st_mtime_ns) for p in HERE.glob("*.py")))
+    if getattr(sys, "_yield_portal_code", None) == seen:
+        return
+    for name, mod in list(sys.modules.items()):
+        path = getattr(mod, "__file__", None)
+        if name != "__main__" and path and pathlib.Path(path).resolve().parent == HERE:
+            sys.modules.pop(name, None)
+    st.cache_data.clear()
+    sys._yield_portal_code = seen
+
+
+_fresh_modules()
 
 # Locally, settings come from this project's .env; on Streamlit Cloud there is
 # no .env and they come from st.secrets (bridged below).

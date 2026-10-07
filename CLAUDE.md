@@ -143,8 +143,17 @@ part)`, carried as `_part` before insert, never stored): a practice with one ent
 just the practice ("Irrigated", as the 2026-10-05 practice split hashed it), several
 are numbered ("Non-irrigated|2", "entry|1"). `reread` reads a row as its own entry
 (by hash, `checks.entry_hash`: two fields of one report can share a yield), else as
-the entry with its practice and yield; the duplicate check never pairs rows of one text, nor different
-practices; `report_text.ordered` shows the shared words once. The fix keeps a stored
+the entry with its practice and yield (a row of a text the parser no longer splits,
+split by an older rule or by hand, gets no re-read: its whole-report reading isn't
+its own); the duplicate check never pairs rows of one text, nor different practices,
+nor fields that name different acres (`checks.field_acres`: "40a 52bpa" in one report
+and "80 acres went 52" in another aren't one field reported twice);
+`report_text.ordered` shows the shared words once. Every row carries the whole text,
+so `checks.run` adds **`field`** ("3 of 4: 40a 52bpa vs. 58bpa in 2024.",
+`checks.field_of`), shown as the Field column on Review & edit (queue and all
+reports) and Explore, and the queue's detail lists the report's other fields:
+without it a split row in the queue looked like one yield taken for a whole
+five-field report (Kolten, 2026-10-06). The fix keeps a stored
 row that already is an entry and gives it its entry's figures when the yields agree
 (`checks.entry_changes`, the suggestion's `updates`: an irrigated half split on
 2026-10-05 had the report's first APH, not its own). Entry hashes use None for a blank field,
@@ -436,7 +445,16 @@ assignments fail.
 
 ## Deployment
 
-Streamlit Community Cloud from this repo (branch `master`, `streamlit_app.py`).
+Streamlit Community Cloud from this repo (branch `master`, `streamlit_app.py`),
+app `yield-app-jsa.streamlit.app` in the **jsa-dashboards** workspace. Cloud pulls
+every push ("Pulling code changes … Updated app!") and re-reads the script and the
+pages, but **keeps the modules it already imported**: on 2026-10-06 the review queue
+ran the morning's first `checks`/`parse_pdfs` all evening, two pushes later, and
+applying its stale suggestions overwrote 8 split rows' figures (restored). So
+`streamlit_app._fresh_modules` forgets this app's modules whenever one of its `.py`
+files changes (and once per process); the next import loads them as pushed.
+Charts get only the columns they plot: the data frame's dict/list columns break
+Arrow (`data.load_all` also drops the row checks' `_…` working columns).
 The repo was created directly in the org — a transferred repo's webhook
 silently stops deploying. The app is **public** on Community Cloud (one private app per workspace), so
 access works like the River FOB portal: `?view=1` is the password-free

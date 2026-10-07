@@ -136,6 +136,20 @@ def _place(r):
     return ", ".join(str(v) for v in (r["location"], r["state"]) if isinstance(v, str) and v)
 
 
+def _fields_of(r):
+    """[("1", "54 bpa"), ...]: the live rows a report that gives several fields became."""
+    same = df[(df["raw_text"] == r["raw_text"]) & (df["crop"] == r["crop"])
+              & (df["crop_year"] == r["crop_year"])
+              & (df["location"].astype(str) == str(r["location"]))
+              & (df["status"] != "superseded") & df["field"].notna()]
+    out = []
+    for s in same.to_dict("records"):
+        y = s["yield_bpa"]
+        out.append((int(s["field"].split(" of ")[0]),
+                    "no yield" if y is None or y != y else f"{y:g} bpa"))
+    return [(str(n), y) for n, y in sorted(out)]
+
+
 MODES = {"queue": f"Needs review ({len(queue_all)})", "places": "Places", "all": "All reports"}
 mode = st.segmented_control(
     "Show", list(MODES), default="queue" if len(queue_all) else "all", key="rev_mode",
@@ -227,7 +241,7 @@ if mode == "queue":
         place=queue.apply(_place, axis=1),
         checks=queue["review_flags"].map(lambda f: ", ".join(SHORT[k] for k in f)),
         fix=queue["suggestion"].map(checks.describe_fix),
-    )[["crop_year", "crop", "place", "yield_bpa", "checks", "fix", "source", "raw_text"]]
+    )[["crop_year", "crop", "place", "yield_bpa", "field", "checks", "fix", "source", "raw_text"]]
     event = st.dataframe(
         table, hide_index=True, height=320, on_select="rerun", selection_mode="single-row",
         key=_table_key("rev_queue", queue["dedup_hash"]),
@@ -236,6 +250,10 @@ if mode == "queue":
             "crop": st.column_config.TextColumn("Crop", width="small"),
             "place": "Place",
             "yield_bpa": st.column_config.NumberColumn("Yield", format="%.1f", width="small"),
+            "field": st.column_config.TextColumn(
+                "Field", width="medium",
+                help="When a report gives several fields, each is its own report: which one "
+                     "this is, in its own words. The report column shows the whole text."),
             "checks": "Flagged for",
             "fix": "Suggested fix",
             "source": st.column_config.TextColumn(
@@ -256,13 +274,20 @@ if mode == "queue":
         st.markdown(f"**{r['crop_year']} {r['crop']} · {_place(r) or 'no place'} · {y}**")
         for k in r["review_flags"]:
             st.markdown(f":orange-badge[{SHORT[k]}] {checks.CHECKS[k]}")
+        if isinstance(r.get("field"), str):             # one of a report's fields
+            st.markdown(f"**Field {RT.md_escape(r['field'])}**")
+            fields = _fields_of(r)
+            st.caption(f"The report gives {len(fields)} fields, each stored as its own report: "
+                       + " · ".join(f"{n} → {y}" for n, y in fields) + ".")
         st.markdown(RT.md_report(r["raw_text"], r["location"], r["state"]))
         others = df[df["dedup_hash"].isin(r["dup_of"])]
         if len(others):
             st.caption(f"This one is from {r['source']}. The other report(s) with the same "
                        "place, crop, year and yield:")
             for o in others.to_dict("records"):
-                st.markdown(f"> :gray-badge[{o['source']}] "
+                which = (f"**Field {RT.md_escape(o['field'])}** — "
+                         if isinstance(o.get("field"), str) else "")
+                st.markdown(f"> :gray-badge[{o['source']}] {which}"
                             + RT.md_report(o["raw_text"], o["location"], o["state"]))
         if r["suggestion"]:
             st.markdown(f"**Suggested fix:** {checks.describe_fix(r['suggestion'])}")
@@ -339,6 +364,7 @@ f = f.sort_values(["crop_year", "state", "location"], ascending=[False, True, Tr
                   na_position="last").reset_index(drop=True)
 hashes = f["dedup_hash"].tolist()
 show = f[EDIT_COLS].copy()
+show.insert(show.columns.get_loc("yield_bpa") + 1, "field", f["field"])
 show.insert(0, "check", f["status"].map(STATUS))
 show.insert(0, "delete", False)
 
@@ -356,6 +382,10 @@ edited = st.data_editor(
         "state": st.column_config.SelectboxColumn("State", options=STATES),
         "location": "Location",
         "yield_bpa": st.column_config.NumberColumn("Yield", format="%.1f"),
+        "field": st.column_config.TextColumn(
+            "Field", disabled=True, width="medium",
+            help="When a report gives several fields, each is its own row: which one this "
+                 "is, in its own words."),
         "yield_min": st.column_config.NumberColumn("Low", format="%.1f"),
         "yield_max": st.column_config.NumberColumn("High", format="%.1f"),
         "ly_yield": st.column_config.NumberColumn("LY", format="%.1f"),
@@ -373,7 +403,7 @@ edited = st.data_editor(
 )
 
 changes = st.session_state.get("rev_editor", {}).get("edited_rows", {})
-edits = {pos: {k: v for k, v in vals.items() if k not in ("delete", "check")}
+edits = {pos: {k: v for k, v in vals.items() if k not in ("delete", "check", "field")}
          for pos, vals in changes.items()}
 edits = {pos: vals for pos, vals in edits.items() if vals}
 to_delete = [hashes[pos] for pos, vals in changes.items() if vals.get("delete")]

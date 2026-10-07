@@ -63,6 +63,9 @@ def load_all() -> pd.DataFrame:
     filter in memory."""
     import checks                  # here, not at the top: checks imports this module
     df = checks.run(_reports(), _decisions())
+    # the row checks' working columns (_entries, _reread, ...) are done with; they hold
+    # dicts no chart or table can show
+    df = df.drop(columns=[c for c in df.columns if c.startswith("_")])
     return df[df["status"] != "superseded"].reset_index(drop=True)
 
 
