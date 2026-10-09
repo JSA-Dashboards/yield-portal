@@ -48,6 +48,12 @@ with st.sidebar:
         disabled=dates.empty,
         help="Only reports dated in this range. Leave it empty for every report."
         if len(dates) else f"No {year} report has a date yet. Dates come from the report emails.")
+    since = st.date_input(
+        "Highlight new since", value=RT.last_report_week(dt.date.today())[0],
+        format="MM/DD/YYYY", key="rt_since",
+        help="Reports dated on or after this day are in yellow, here and in the Word and PDF "
+             "downloads. It starts at the week the last Tuesday email covered: what that email "
+             "called new, and everything reported since.")
     order = st.segmented_control("Order within a state", ["Date", "Place"], default="Date",
                                  key="rt_order") or "Date"
     q = st.text_input("Search", placeholder="County, town, or any word", key="rt_q").strip()
@@ -71,12 +77,15 @@ if f.empty:
 
 f = RT.ordered(f, by="place" if order == "Place" else "date")
 n_dated = int(f["date_reported"].map(_is_date).sum())
+n_new = int(f["date_reported"].map(lambda d: RT.is_new(d, since)).sum())
 
 summary = f"**{len(f):,} reports** · {f['state'].nunique()} states"
 if n_dated == 0:
     summary += f" · no report dates for {year} yet"
 elif n_dated < len(f):
     summary += f" · {n_dated:,} dated"
+if n_new:
+    summary += f" · :yellow-background[{n_new:,} new since {since:%b} {since.day}]"
 
 
 def _subtitle():
@@ -91,6 +100,8 @@ def _subtitle():
     if q:
         parts.append(f"matching “{q}”")
     parts += [f"{len(f):,} reports", f"made {today:%b} {today.day}, {today.year}"]
+    if n_new:
+        parts.append(f"yellow: reported since {since:%b} {since.day}")
     return " · ".join(parts)
 
 
@@ -103,15 +114,15 @@ with st.container(horizontal=True, horizontal_alignment="distribute",
         with st.container(horizontal=True, width="content"):
             # built only when clicked, from the reports shown here
             st.download_button(
-                "Word", data=lambda: RT.to_docx(f, title, subtitle), file_name=f"{stem}.docx",
+                "Word", data=lambda: RT.to_docx(f, title, subtitle, since), file_name=f"{stem}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 on_click="ignore", icon=":material/description:")
             st.download_button(
-                "PDF", data=lambda: RT.to_pdf(f, title, subtitle), file_name=f"{stem}.pdf",
+                "PDF", data=lambda: RT.to_pdf(f, title, subtitle, since), file_name=f"{stem}.pdf",
                 mime="application/pdf", on_click="ignore", icon=":material/picture_as_pdf:")
 
 for crop, state_rows in RT.sections(f):
     st.header(crop, divider="gray")
     for name, rows in state_rows:
         st.subheader(f"{name} :gray[· {len(rows)}]")
-        st.markdown(RT.md_table(rows, q, dates=n_dated > 0))
+        st.markdown(RT.md_table(rows, q, dates=n_dated > 0, new_since=since))
