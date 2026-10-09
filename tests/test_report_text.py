@@ -128,6 +128,42 @@ check("word: an undated report", "Clark Co, IL: 230 bpa." in paras, True)
 bold = [r.text for p in word.paragraphs for r in p.runs if r.bold]
 check("word: labels bold", "Adams Co, IL: " in bold, True)
 
+# --- yellow: reported since the week the last Tuesday email covered ------------------
+check("last report week, on a Thursday", RT.last_report_week(dt.date(2026, 10, 8)),
+      (dt.date(2026, 9, 29), dt.date(2026, 10, 5)))
+check("...on the Tuesday itself", RT.last_report_week(dt.date(2026, 10, 6)),
+      (dt.date(2026, 9, 29), dt.date(2026, 10, 5)))
+check("...on the Monday before the next", RT.last_report_week(dt.date(2026, 10, 12)),
+      (dt.date(2026, 9, 29), dt.date(2026, 10, 5)))
+since = dt.date(2026, 9, 24)
+check("new: on or after the day; never undated",
+      [RT.is_new(d, since) for d in (dt.date(2026, 9, 24), dt.date(2026, 9, 23), None,
+                                     pd.Timestamp("2026-09-30"))], [True, False, False, True])
+check("no day, nothing new", RT.is_new(dt.date(2026, 9, 30), None), False)
+il = RT.ordered(df)[lambda d: d["state"] == "IL"]
+check("page: a new report's date in yellow",
+      [":yellow-background[Sep 25]" in RT.md_table(il, new_since=since),
+       ":gray[Sep 21]" in RT.md_table(il, new_since=since)], [True, True])
+check("pdf html: one yellow paragraph per new report (Adams 9/25, Story 9/28)",
+      RT.report_html(RT.ordered(df), "t", "s", since).count(f"background-color:{RT.NEW_BG}"), 2)
+
+
+def yellow_fills(pdf_bytes):
+    d = fitz.open("pdf", pdf_bytes)
+    return sum(1 for pg in d for g in pg.get_drawings()
+               if g.get("fill") and abs(g["fill"][2] - 0.627) < 0.01 and g["fill"][0] > 0.99)
+
+
+check("pdf: yellow behind the new reports, none without a day",
+      (yellow_fills(RT.to_pdf(RT.ordered(df), "t", "s", since)) >= 2,
+       yellow_fills(RT.to_pdf(RT.ordered(df), "t", "s"))), (True, 0))
+from docx.enum.text import WD_COLOR_INDEX  # noqa: E402
+
+hl = Document(io.BytesIO(RT.to_docx(RT.ordered(df), "t", "s", since)))
+lit = sorted({p.text.split(":")[0].split("   ")[-1] for p in hl.paragraphs
+              if p.runs and all(r.font.highlight_color == WD_COLOR_INDEX.YELLOW for r in p.runs)})
+check("word: the new reports highlighted", lit, ["Adams Co, IL", "Story Co, IA"])
+
 if failures:
     print(f"{len(failures)} FAILED:")
     for f in failures:

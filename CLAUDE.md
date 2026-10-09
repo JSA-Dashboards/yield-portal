@@ -535,6 +535,15 @@ Within a state: the PDF's order (report date, undated after by place) or by plac
 Word (python-docx) and PDF (PyMuPDF's Story HTML layout) downloads are built on
 click from what's on screen, and are hidden on the view link like the CSV.
 
+**New reports in yellow** (Kolten, 2026-10-08: the downloads should show the yellow
+the weekly email does). Reports dated on or after the sidebar's "Highlight new
+since" day are on yellow (`report_text.NEW_BG`, the email's colour) in the PDF, highlighted
+in Word, and have a yellow date on the page; the summary counts them and the
+download subtitle says "yellow: reported since …". The day defaults to the start of
+the week the last Tuesday email covered (`last_report_week`), so a download shows
+what that email called new plus everything reported since. Undated reports never
+are. Until then only the email marked new reports; the downloads never had it.
+
 Report text is free text, so it is escaped for Markdown (`~10%` would strike
 through, `$395 … $255` would turn into math) and for HTML. Each state is a
 Markdown table, not `st.table`: `st.table` caps a Markdown cell at 400px, which

@@ -19,6 +19,23 @@ from parse_pdfs import STATE_ABBR
 STATE_NAME = {ab: name.title() for name, ab in STATE_ABBR.items()}
 CROP_ORDER = {"Corn": 0, "Soybeans": 1}
 _MD_SPECIAL = re.compile(r"([\\`*_~$\[\]<>#|])")
+NEW_BG = "#fff3a0"         # new reports, in yellow, as the weekly email marks them
+
+
+def last_report_week(today):
+    """(first, last) report dates the latest Tuesday email called new: the seven days
+    before the most recent Tuesday on or before `today` (weekly_email.send_day/week).
+    Report text highlights from the first of them, so a download shows what that
+    email called new and everything reported since."""
+    day = today - _dt.timedelta(days=(today.weekday() - 1) % 7)
+    return day - _dt.timedelta(days=7), day - _dt.timedelta(days=1)
+
+
+def is_new(d, since) -> bool:
+    """Reported on or after `since` (a report with no date never is)."""
+    if since is None or d is None or not isinstance(d, _dt.date) or pd.isna(d):
+        return False
+    return (d.date() if isinstance(d, _dt.datetime) else d) >= since
 
 
 def state_name(ab) -> str:
@@ -109,15 +126,17 @@ def md_report(raw, location, state, query: str = "", source=None, company=None) 
     return head + _highlight(body, query) + (f" :{color}-badge[{md_escape(tag)}]" if tag else "")
 
 
-def md_table(rows: pd.DataFrame, query: str = "", dates: bool = True) -> str:
+def md_table(rows: pd.DataFrame, query: str = "", dates: bool = True, new_since=None) -> str:
     """A state's reports as a Markdown table: the report date beside each report
-    (left out when nothing in view has a date). A Markdown table rather than
-    st.table, whose text cells stop at 400px and turn paragraphs into columns."""
+    (left out when nothing in view has a date), in yellow when it's on or after
+    `new_since`. A Markdown table rather than st.table, whose text cells stop at
+    400px and turn paragraphs into columns."""
     head = ["Reported", "Report"] if dates else ["Report"]
     out = ["| " + " | ".join(head) + " |", "|" + " --- |" * len(head)]
     for r in rows.itertuples():
-        cells = [f":gray[{day_label(r.date_reported)}]" if day_label(r.date_reported) else ""] \
-            if dates else []
+        day = day_label(r.date_reported)
+        mark = "yellow-background" if is_new(r.date_reported, new_since) else "gray"
+        cells = [f":{mark}[{day}]" if day else ""] if dates else []
         cells.append(md_report(r.raw_text, r.location, r.state, query,
                                getattr(r, "source", None), getattr(r, "source_file", None)))
         out.append("| " + " | ".join(cells) + " |")
@@ -136,7 +155,8 @@ span.d { color: #6b7280; }
 """
 
 
-def report_html(df: pd.DataFrame, title: str, subtitle: str) -> str:
+def report_html(df: pd.DataFrame, title: str, subtitle: str, new_since=None) -> str:
+    """The PDF's HTML; a report dated on or after `new_since` on yellow."""
     e = html.escape
     out = [f"<h1>{e(title)}</h1>", f"<p class='sub'>{e(subtitle)}</p>"]
     for crop, states in sections(df):
@@ -146,7 +166,8 @@ def report_html(df: pd.DataFrame, title: str, subtitle: str) -> str:
             for r in rows.itertuples():
                 label, body = label_and_body(r.raw_text, r.location, r.state)
                 day = day_label(r.date_reported)
-                out.append("<p class='r'>"
+                new = is_new(r.date_reported, new_since)
+                out.append((f"<p class='r' style='background-color:{NEW_BG}'>" if new else "<p class='r'>")
                            + (f"<span class='d'>{day}&nbsp;&nbsp;</span>" if day else "")
                            + (f"<b>{e(label)}</b> " if label else "")
                            + f"{e(body)}"
@@ -157,10 +178,11 @@ def report_html(df: pd.DataFrame, title: str, subtitle: str) -> str:
     return "".join(out)
 
 
-def to_pdf(df: pd.DataFrame, title: str, subtitle: str) -> bytes:
-    """Letter pages, same layout as the page, numbered."""
+def to_pdf(df: pd.DataFrame, title: str, subtitle: str, new_since=None) -> bytes:
+    """Letter pages, same layout as the page, numbered; reports dated on or after
+    `new_since` on yellow."""
     import fitz
-    story = fitz.Story(html=report_html(df, title, subtitle), user_css=_PDF_CSS)
+    story = fitz.Story(html=report_html(df, title, subtitle, new_since), user_css=_PDF_CSS)
     buf = io.BytesIO()
     writer = fitz.DocumentWriter(buf)
     page = fitz.paper_rect("letter")
@@ -186,8 +208,10 @@ def to_pdf(df: pd.DataFrame, title: str, subtitle: str) -> bytes:
 
 
 # --- Word ---------------------------------------------------------------------
-def to_docx(df: pd.DataFrame, title: str, subtitle: str) -> bytes:
+def to_docx(df: pd.DataFrame, title: str, subtitle: str, new_since=None) -> bytes:
+    """The same layout in Word; reports dated on or after `new_since` highlighted."""
     from docx import Document
+    from docx.enum.text import WD_COLOR_INDEX
     from docx.shared import Inches, Pt, RGBColor
 
     gray, blue = RGBColor(0x6B, 0x72, 0x80), RGBColor(0x06, 0x93, 0xE3)
@@ -220,6 +244,9 @@ def to_docx(df: pd.DataFrame, title: str, subtitle: str) -> bytes:
                 tag = source_tag(getattr(r, "source", None), getattr(r, "source_file", None))
                 if tag:
                     p.add_run(f" ({tag})").font.color.rgb = gray
+                if is_new(r.date_reported, new_since):
+                    for run in p.runs:
+                        run.font.highlight_color = WD_COLOR_INDEX.YELLOW
     out = io.BytesIO()
     doc.save(out)
     return out.getvalue()

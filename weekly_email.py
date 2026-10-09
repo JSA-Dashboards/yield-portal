@@ -70,7 +70,7 @@ import report_text as RT  # noqa: E402
 
 DARK, BLUE, GRAY, LINE = "#32373c", "#0693e3", "#6b7280", "#e5e7eb"
 UP, DOWN = "#15803d", "#b91c1c"
-NEW_BG = "#fff3a0"                     # the past week's reports
+NEW_BG = RT.NEW_BG                      # the past week's reports (Report text's yellow too)
 FONT = "Segoe UI, Arial, sans-serif"
 PR_ATTACH_CONTENT_ID = "http://schemas.microsoft.com/mapi/proptag/0x3712001F"
 PR_ATTACHMENT_HIDDEN = "http://schemas.microsoft.com/mapi/proptag/0x7FFE000B"
