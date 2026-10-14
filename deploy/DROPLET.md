@@ -40,6 +40,18 @@ Graph sendMail as the basis tracker's shared mailbox (its app has Mail.Send).
 - The `WEEKLY_EMAILS` table stops a second send in the same week from any
   machine. Keep the PC's "Yield Portal - weekly email" task disabled anyway.
 
+## Field signal: live
+
+`deploy/run_field_signal.sh` runs `field_signal.py --apply` (no settings beyond
+the Snowflake ones): it replaces `FIELD_SIGNAL`, which the Conditions dashboard's
+Field Check tab reads in the admin portal.
+
+- Check: `.venv/bin/python field_signal.py` prints the error-curve fit, how often
+  past misses fell within 1 and 2 σ, and the season's rows; it writes nothing.
+- Cron, twice a day so the morning's emailed reports show by the afternoon:
+  `30 6,13 * * * /opt/alerting/cron-alert "Yield Portal field signal" "/opt/yield-portal/logs/field_signal_*.log" /opt/yield-portal/deploy/run_field_signal.sh`.
+  Its healthchecks.io schedule: `30 6,13 * * *`, America/Chicago.
+
 ## Email sync: waiting on IT
 
 `deploy/run_email_sync.sh` runs `match_emails.py --target snowflake --source graph --auto`,

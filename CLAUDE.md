@@ -253,6 +253,40 @@ County") or several ("Moultrie/Coles Co") is used straight away; a near-spelling
 Moines" is in Polk County) waits on **Review & edit → Places** (`COUNTY_MATCHES`);
 towns and regions use the state's numbers rather than a guessed county.
 
+## Field signal — the reports as a state yield read (internal)
+
+`field_signal.py` turns Reports vs normal's ratio into each state's yield and how far
+to trust it, for the Conditions dashboard's beta **Field Check** tab (Kolten,
+2026-10-14: pair this objective data with the conditions yield model; "Internal only,
+evidence-based weights"). One table, `FIELD_SIGNAL`, replaced whole by `python
+field_signal.py --apply` (one INSERT OVERWRITE from a temp table, so a reader never
+sees it half written and a second run can't double it), twice a day on the Droplet
+(`deploy/DROPLET.md`). Without `--apply` it's a dry run. `YIELD_PORTAL_ROLE` creates
+the table (CREATE TABLE on the schema).
+
+- **Read**: the median report against its county's 5-season average (the reports
+  Reports vs normal counts: Ag Trader Talk + JSA, no silage, no state fallback),
+  divided by the **premium** (how far that ratio ran above the NASS final's own
+  ratio: the median over states with 5+ reports in the OTHER finished seasons),
+  times the state's 5-season average.
+- **Error**: each finished season's reads (premium from the other seasons) against
+  the NASS finals, fitted by maximum likelihood to σ² = base² + one²/n (n = reports):
+  a season-to-season part no report count removes, and one report's scatter. Every
+  run prints the fit and how often the misses fell within 1 and 2 σ by report count.
+  Look at it after a season's finals land. (A fixed per-report term from the
+  within-state spread under-states small states, whose few reports cluster.)
+- **Rows**: `season` (a finished season, all its reports), `week` (the open season,
+  reports dated through each Sunday) and `latest` (everything so far, undated too).
+  Past seasons' reports aren't dated (the annual PDFs), so the evidence is
+  season-end only. USDA's Aug–Nov state forecasts ride along for the backtest.
+- **Who sees it**: the dashboard adds the tab only with `FIELD_CHECK = "1"` (pinned by
+  the admin portal's sync) and a login that can read `YIELD_REPORTS`
+  (`ADMIN_PORTAL_ROLE`: SELECT on all + future tables here). The standalone
+  Conditions app has neither; no page of this portal shows it.
+- The blend with the conditions model (by each read's measured miss and how much the
+  two misses move together) lives in crop-conditions-dashboard, which owns the model.
+- `python tests/test_field_signal.py` after changes (made-up numbers).
+
 ## Field issues — a reference, not a damage estimate (internal)
 
 `app_pages/field_issues.py` + `field_issues.py`, registered only off the view link.
