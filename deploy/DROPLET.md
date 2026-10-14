@@ -48,9 +48,10 @@ Field Check tab reads in the admin portal.
 
 - Check: `.venv/bin/python field_signal.py` prints the error-curve fit, how often
   past misses fell within 1 and 2 σ, and the season's rows; it writes nothing.
-- Cron, twice a day so the morning's emailed reports show by the afternoon:
-  `30 6,13 * * * /opt/alerting/cron-alert "Yield Portal field signal" "/opt/yield-portal/logs/field_signal_*.log" /opt/yield-portal/deploy/run_field_signal.sh`.
-  Its healthchecks.io schedule: `30 6,13 * * *`, America/Chicago.
+- Cron, twice a day, after the NASS ETL's 6:30 and 15:00 runs (it reads the NASS
+  cache):
+  `15 8,16 * * * /opt/alerting/cron-alert "Yield Portal field signal" "/opt/yield-portal/logs/field_signal_*.log" /opt/yield-portal/deploy/run_field_signal.sh`.
+  Its healthchecks.io schedule: `15 8,16 * * *`, America/Chicago.
 
 ## Email sync: waiting on IT
 
