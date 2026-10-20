@@ -589,7 +589,14 @@ after changes.
 `weekly_email.py` builds the Tuesday-morning email for the JSA group: for the
 current crop year, per crop, Explore's headline tiles (`data.headline`, with %
 changes) and two charts (yields by crop year; average by state, this year vs last;
-Altair → PNG with `vl-convert-python`, embedded as `cid:` attachments). A yellow
+Altair → PNG with `vl-convert-python`, embedded as `cid:` attachments). Kolten,
+2026-10-20 ("clear but subtle"): every chart carries the JSA logo as a faint centred
+watermark (`assets/jsa_logo.png`, jpsi.com's logo; the dashboards' `_wm_center` look:
+55% wide, 7% opacity, under the marks — the chart renders on a transparent background
+and `_watermark` lays it over white + logo with Pillow), and the state chart has a
+slim column beside its bars with each state's average against last year's
+(`state_changes`): green up / red down, gray where either year has fewer than 3
+reports (the portal's "Too few"), "—" where a year has none. A yellow
 "New this week" box at the top lists the reports dated in the past week, and
 the season's report text follows (laid out like Report text), with those reports
 highlighted in yellow. "The past week" is the seven days before the send day

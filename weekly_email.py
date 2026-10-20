@@ -37,6 +37,7 @@ import argparse
 import base64
 import datetime as dt
 import html
+import io
 import os
 import pathlib
 import socket
@@ -108,15 +109,41 @@ def counted(df, crop):
 
 
 # --- charts (Altair -> PNG, embedded) ------------------------------------------------
+LOGO = HERE / "assets" / "jsa_logo.png"     # the JSA logo (jpsi.com's logo-full.png)
+WATERMARK_OPACITY = 0.07                     # as the dashboards draw it (_wm_center)
+
+
 def _png(chart) -> bytes:
     import vl_convert as vlc
     # Segoe UI on the PC; the Droplet (Linux) has none of it, so fall back
-    chart = (chart.configure(font="Segoe UI, Liberation Sans, DejaVu Sans, Arial, sans-serif")
+    chart = (chart.configure(font="Segoe UI, Liberation Sans, DejaVu Sans, Arial, sans-serif",
+                             background="transparent")
              .configure_view(stroke=None)
              .configure_title(fontSize=13, anchor="start", color=DARK, fontWeight=600)
              .configure_axis(labelColor=GRAY, titleColor=GRAY, gridColor="#eef2f6",
                              domainColor=LINE, tickColor=LINE))
-    return vlc.vegalite_to_png(chart.to_json(), scale=2)
+    return _watermark(vlc.vegalite_to_png(chart.to_json(), scale=2))
+
+
+def _watermark(png: bytes) -> bytes:
+    """The JSA logo, faint and centred under the chart, the way the dashboards mark
+    theirs (Crop Conditions' _wm_center: the full logo, 55% of the width, 7% opacity,
+    below the marks). The chart renders on a transparent background and is laid over
+    white + logo, so bars and text stay crisp."""
+    from PIL import Image
+    chart = Image.open(io.BytesIO(png)).convert("RGBA")
+    canvas = Image.new("RGBA", chart.size, (255, 255, 255, 255))
+    if LOGO.exists():
+        logo = Image.open(LOGO).convert("RGBA")
+        w = int(chart.width * 0.55)
+        h = round(logo.height * w / logo.width)
+        logo = logo.resize((w, h), Image.LANCZOS)
+        logo.putalpha(logo.getchannel("A").point(lambda a: round(a * WATERMARK_OPACITY)))
+        canvas.alpha_composite(logo, ((chart.width - w) // 2, (chart.height - h) // 2))
+    canvas.alpha_composite(chart)
+    out = io.BytesIO()
+    canvas.convert("RGB").save(out, "PNG", optimize=True)
+    return out.getvalue()
 
 
 def box_chart(f, crop):
@@ -141,16 +168,56 @@ def state_chart(f, crop, year, prev, years_all):
     pinned = data.year_scale(years_all)            # each year in its portal colour
     shown = [y for y in (year, prev) if y is not None]
     colours = dict(zip(pinned.domain, pinned.range))
-    return alt.Chart(g).mark_bar(cornerRadiusEnd=2).encode(
-        y=alt.Y("state:N", sort=top, title=None, scale=alt.Scale(paddingInner=0.3)),
+    height = max(150, 24 * len(top))
+    band = alt.Scale(paddingInner=0.3)
+    bars = alt.Chart(g).mark_bar(cornerRadiusEnd=2).encode(
+        y=alt.Y("state:N", sort=top, title=None, scale=band),
         x=alt.X("avg:Q", title="Avg reported yield (bpa)"),
         color=alt.Color("crop_year:N", title=None,
                         scale=alt.Scale(domain=shown, range=[colours[y] for y in shown]),
                         legend=alt.Legend(orient="bottom", direction="horizontal")),
         yOffset=alt.YOffset("crop_year:N", sort="descending",
                             scale=alt.Scale(paddingInner=0.15)),
-    ).properties(width=300, height=max(150, 24 * len(top)),
-                 title=f"{crop}: average by state, {year} vs {prev}")
+    )
+    if prev is None:
+        return bars.properties(width=300, height=height, title=f"{crop}: average by state, {year}")
+    # each state's change beside its pair of bars: small, green up / red down, so it
+    # reads at a glance without competing with the bars
+    col = alt.Chart(state_changes(g, year, prev, top)).mark_text(
+        align="right", baseline="middle", fontSize=11,
+    ).encode(
+        y=alt.Y("state:N", sort=top, axis=None, scale=band),
+        x=alt.value(40),
+        text="label:N",
+        color=alt.Color("tone:N", legend=None,
+                        scale=alt.Scale(domain=["up", "down", "flat"], range=[UP, DOWN, GRAY])),
+    ).properties(width=40, height=height,
+                 title=alt.TitleParams(f"vs {prev}", fontSize=10, fontWeight="normal",
+                                       color=GRAY, anchor="end"))
+    return (alt.hconcat(bars.properties(width=254, height=height), col, spacing=6, bounds="flush")
+            .resolve_scale(y="shared", color="independent")
+            .properties(title=f"{crop}: average by state, {year} vs {prev}"))
+
+
+THIN = 3        # under 3 reports in a year: the portal's "Too few" (analysis.tier)
+
+
+def state_changes(g, year, prev, states):
+    """The column beside the state bars: each state's average this year against its
+    average last year, '+4.2%' / '−3.1%', green up / red down, gray when either year
+    has fewer than THIN reports (a swing that thin shouldn't catch the eye), '—' when
+    either year has none."""
+    k = g.set_index(["state", "crop_year"])
+    rows = []
+    for s in states:
+        if (s, year) not in k.index or (s, prev) not in k.index or not k.at[(s, prev), "avg"]:
+            rows.append({"state": s, "label": "—", "tone": "flat"})
+            continue
+        pct = (k.at[(s, year), "avg"] / k.at[(s, prev), "avg"] - 1) * 100
+        thin = min(k.at[(s, year), "n"], k.at[(s, prev), "n"]) < THIN
+        rows.append({"state": s, "label": _signed(pct, "%"),
+                     "tone": "flat" if thin or abs(pct) < 0.05 else ("up" if pct > 0 else "down")})
+    return pd.DataFrame(rows, columns=["state", "label", "tone"])
 
 
 # --- HTML pieces (tables and inline styles: Outlook renders with Word) ----------------
@@ -288,8 +355,9 @@ def build(today: dt.date):
 
     portal = os.environ.get("YIELD_PORTAL_URL", "").strip()
     footer = ("Averages are of the reports themselves, not county or state estimates, and count "
-              "reviewed reports only (silage left out of corn). Report text holds every report "
-              "of the season.")
+              "reviewed reports only (silage left out of corn). Beside the state chart: each "
+              "state's average against last year's, in gray where either year has fewer than "
+              f"{THIN} reports. Report text holds every report of the season.")
     if portal:
         footer += f' <a href="{e(portal)}" style="color:{BLUE}">Open the Yield Portal</a>.'
     stamp = f"{day:%A}, {day:%B} {day.day}, {day.year}"
