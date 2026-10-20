@@ -596,7 +596,8 @@ watermark (`assets/jsa_logo.png`, jpsi.com's logo; the dashboards' `_wm_center` 
 and `_watermark` lays it over white + logo with Pillow), and the state chart has a
 slim column beside its bars with each state's average against last year's
 (`state_changes`): green up / red down, gray where either year has fewer than 3
-reports (the portal's "Too few"), "—" where a year has none. A yellow
+reports (the portal's "Too few"), "—" where a year has none. Each state's label
+carries this season's report count, "IA (12)" (Kolten, 2026-10-20: "for context"). A yellow
 "New this week" box at the top lists the reports dated in the past week, and
 the season's report text follows (laid out like Report text), with those reports
 highlighted in yellow. "The past week" is the seven days before the send day

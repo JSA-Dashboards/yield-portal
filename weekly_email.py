@@ -165,13 +165,18 @@ def state_chart(f, crop, year, prev, years_all):
            ["state"].head(10).tolist())
     g = g[g["state"].isin(top)].copy()
     g["crop_year"] = g["crop_year"].astype(int)
+    # each state's report count this season beside its name: how much its bar rests on
+    n_now = g[g["crop_year"] == year].set_index("state")["n"]
+    rows = {s: f"{s} ({int(n_now[s])})" for s in top}
+    order = [rows[s] for s in top]
+    g["row"] = g["state"].map(rows)
     pinned = data.year_scale(years_all)            # each year in its portal colour
     shown = [y for y in (year, prev) if y is not None]
     colours = dict(zip(pinned.domain, pinned.range))
     height = max(150, 24 * len(top))
     band = alt.Scale(paddingInner=0.3)
     bars = alt.Chart(g).mark_bar(cornerRadiusEnd=2).encode(
-        y=alt.Y("state:N", sort=top, title=None, scale=band),
+        y=alt.Y("row:N", sort=order, title=None, scale=band),
         x=alt.X("avg:Q", title="Avg reported yield (bpa)"),
         color=alt.Color("crop_year:N", title=None,
                         scale=alt.Scale(domain=shown, range=[colours[y] for y in shown]),
@@ -180,13 +185,14 @@ def state_chart(f, crop, year, prev, years_all):
                             scale=alt.Scale(paddingInner=0.15)),
     )
     if prev is None:
-        return bars.properties(width=300, height=height, title=f"{crop}: average by state, {year}")
+        return bars.properties(width=278, height=height, title=f"{crop}: average by state, {year}")
     # each state's change beside its pair of bars: small, green up / red down, so it
     # reads at a glance without competing with the bars
-    col = alt.Chart(state_changes(g, year, prev, top)).mark_text(
+    chg = state_changes(g, year, prev, top).assign(row=lambda d: d["state"].map(rows))
+    col = alt.Chart(chg).mark_text(
         align="right", baseline="middle", fontSize=11,
     ).encode(
-        y=alt.Y("state:N", sort=top, axis=None, scale=band),
+        y=alt.Y("row:N", sort=order, axis=None, scale=band),
         x=alt.value(40),
         text="label:N",
         color=alt.Color("tone:N", legend=None,
@@ -194,7 +200,7 @@ def state_chart(f, crop, year, prev, years_all):
     ).properties(width=40, height=height,
                  title=alt.TitleParams(f"vs {prev}", fontSize=10, fontWeight="normal",
                                        color=GRAY, anchor="end"))
-    return (alt.hconcat(bars.properties(width=254, height=height), col, spacing=6, bounds="flush")
+    return (alt.hconcat(bars.properties(width=232, height=height), col, spacing=6, bounds="flush")
             .resolve_scale(y="shared", color="independent")
             .properties(title=f"{crop}: average by state, {year} vs {prev}"))
 
@@ -355,9 +361,10 @@ def build(today: dt.date):
 
     portal = os.environ.get("YIELD_PORTAL_URL", "").strip()
     footer = ("Averages are of the reports themselves, not county or state estimates, and count "
-              "reviewed reports only (silage left out of corn). Beside the state chart: each "
-              "state's average against last year's, in gray where either year has fewer than "
-              f"{THIN} reports. Report text holds every report of the season.")
+              f"reviewed reports only (silage left out of corn). State chart: each state's {year} "
+              "report count in parentheses and, beside its bars, its average against last year's, "
+              f"in gray where either year has fewer than {THIN} reports. Report text holds every "
+              "report of the season.")
     if portal:
         footer += f' <a href="{e(portal)}" style="color:{BLUE}">Open the Yield Portal</a>.'
     stamp = f"{day:%A}, {day:%B} {day.day}, {day.year}"
