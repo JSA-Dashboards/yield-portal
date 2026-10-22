@@ -328,6 +328,13 @@ python load_trials.py                     # local SQLite
 python load_trials.py --target snowflake  # the .env service login
 ```
 
+**New seasons** (Kolten, 2026-10-22): `variety_watch.py` on the Droplet emails when a state
+posts a season's results (Mondays, Nov–Mar; `deploy/DROPLET.md`); the refresh stays a
+person's job, because each state's format shifts year to year and a parser can read a new
+layout cleanly but wrongly. Nebraska and Wisconsin corn stopped posting at their sources
+after 2023, Michigan corn after 2022; Wisconsin soybeans moved to Badger Crop Network's
+results page.
+
 Both tables are **dropped and recreated** on load, not merged: a reload follows an
 upstream parser change, and the whole point is that a site-year's figure moves when the
 extractor improves. A column added upstream therefore needs no ALTER.

@@ -51,6 +51,18 @@ fails or ISA's trial list comes back shorter than last time.
   `0 3 1,15 10-12 * /opt/alerting/cron-alert "Yield Portal ISA refresh" "/opt/yield-portal/logs/isa_refresh_*.log" /opt/yield-portal/deploy/run_isa_refresh.sh`
   and `0 3 1 1-9 *` with the same command.
 
+## Variety-trial watcher: live
+
+`deploy/run_variety_watch.sh` runs `variety_watch.py --notify`: checks the seven state
+programs' sources for the season's corn and soybean results and emails
+`VARIETY_WATCH_TO` (`.env`) once per state and season when they appear; the refresh is
+then done by hand. Each email also lists every source and whether last season is still
+visible there (a source that lost it has moved). `python variety_watch.py` alone prints
+the status and sends nothing.
+
+- Cron, Mondays 6:00 in Nov–Mar, when results are posted:
+  `0 6 * 11,12,1,2,3 1 /opt/alerting/cron-alert "Yield Portal variety watch" "/opt/yield-portal/logs/variety_watch_*.log" /opt/yield-portal/deploy/run_variety_watch.sh`
+
 ## Field signal: live
 
 `deploy/run_field_signal.sh` runs `field_signal.py --apply` (no settings beyond
