@@ -40,6 +40,17 @@ Graph sendMail as the basis tracker's shared mailbox (its app has Mail.Send).
 - The `WEEKLY_EMAILS` table stops a second send in the same week from any
   machine. Keep the PC's "Yield Portal - weekly email" task disabled anyway.
 
+## ISA strip trials refresh: live
+
+`deploy/run_isa_refresh.sh` runs `load_isa.py fetch --last-year <this year>` (only
+reports not yet in `data/isa/text` are downloaded) and then `load_isa.py load
+--target snowflake` (rebuilds `ISA_STRIP_TRIALS`). It skips the load when the fetch
+fails or ISA's trial list comes back shorter than last time.
+
+- Cron: twice a month in Oct–Dec, when new seasons' reports appear, monthly otherwise:
+  `0 3 1,15 10-12 * /opt/alerting/cron-alert "Yield Portal ISA refresh" "/opt/yield-portal/logs/isa_refresh_*.log" /opt/yield-portal/deploy/run_isa_refresh.sh`
+  and `0 3 1 1-9 *` with the same command.
+
 ## Field signal: live
 
 `deploy/run_field_signal.sh` runs `field_signal.py --apply` (no settings beyond

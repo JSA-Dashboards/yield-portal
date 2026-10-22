@@ -357,7 +357,8 @@ python load_isa.py fetch                       # the trial list + each report's 
 python load_isa.py load [--target snowflake]   # read the text, replace the table
 ```
 
-`fetch` takes ISA's public database one year at a time (all years at once gives an HTTP
+Refreshed by the Droplet (`deploy/run_isa_refresh.sh`, the 1st and 15th of Oct–Dec, the
+1st of other months; `deploy/DROPLET.md`). `fetch` takes ISA's public database one year at a time (all years at once gives an HTTP
 500), then each trial's PDF report with a 2 s pause, keeping only its text
 (`data/isa/text/<trial id>.txt`) and skipping what's cached. The first run takes about 3 h,
 so it runs on the Droplet. `data/` is gitignored: the repo is public. **Case trap:** the list
