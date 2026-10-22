@@ -99,6 +99,20 @@ out_nc = checks.run(pd.DataFrame(no_crop), {})
 check("no crop but a corn-sized yield: corn suggested",
       (out_nc.loc[0, "review_flags"], out_nc.loc[0, "suggestion"]), (["incomplete"], {"crop": "Corn"}))
 check("no crop and a yield either crop could make: set by hand", out_nc.loc[1, "suggestion"], None)
+# a subject naming both crops leaves the email crop-less; each crop's yield in its own
+# sentence means the two-crop split answers it (2026-10-21)
+two = row("Soybeans are 80% out, about 58bpa. Corn is 30% out, 214bpa vs 205ly.",
+          crop=None, state="IA", location="Polk Co")
+out_two = checks.run(pd.DataFrame([two]), {})
+check("no crop, both crops with yields: 'split', not 'incomplete'",
+      (out_two.loc[0, "review_flags"], sorted(out_two.loc[0, "suggestion"]["split"])),
+      (["split"], ["Corn", "Soybeans"]))
+kids = checks.split_rows(out_two.loc[0].to_dict())
+check("...the split gives each crop its own yield and place",
+      sorted((k["crop"], k["yield_bpa"], k["state"], k["location"]) for k in kids),
+      [("Corn", 214.0, "IA", "Polk Co"), ("Soybeans", 58.0, "IA", "Polk Co")])
+check("...but with no state it still waits as 'incomplete'",
+      checks.run(pd.DataFrame([dict(two, state=None)]), {}).loc[0, "review_flags"], ["incomplete"])
 
 # --- a report with both crops -------------------------------------------------------
 both = row("Story Co, IA: Corn running 205 bu/ac vs 215 target. First beans went 61 bu/ac "

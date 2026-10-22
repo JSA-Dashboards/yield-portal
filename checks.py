@@ -214,6 +214,13 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
         if gone[i]:
             continue
         if r["crop"] not in ("Corn", "Soybeans") or _missing(r["state"]) or not r["state"]:
+            parts = r["_split"] if "_split" in r else P.split_by_crop(r["raw_text"] or "", r["crop"])
+            if parts and isinstance(r["state"], str) and r["state"]:
+                # an email whose subject names both crops is stored crop-less; when each
+                # crop carries its own yield, the split answers the crop (2026-10-21)
+                flags[i].append("split")
+                suggestion[i] = {"split": parts}
+                continue
             flags[i].append("incomplete")     # an auto-loaded email nobody could place
             if (r["crop"] not in ("Corn", "Soybeans") and isinstance(r["state"], str)
                     and r["state"] and not _missing(r["yield_bpa"])
