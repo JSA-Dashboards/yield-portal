@@ -125,7 +125,7 @@ check("'236 bpa aph 215': 215 is the APH, not 236", [r["aph"] for r in rows], [N
 rows = email("YIELD: Polk Co IA beans", "Polk Co, IA: 120 acres went 61.5 bpa vs. 57.5bpa APH")
 check("a decimal APH", (rows[0]["yield_max"], rows[0]["aph"]), (61.5, 57.5))
 rows = email("YIELD: Polk Co IA corn", "Polk Co, IA: 120 acres made 188 bpa vs an early August yield check at 214 bpa")
-check("a yield check is an estimate", (rows[0]["yield_max"], rows[0]["expected_yield"]), (195, 221))
+check("a yield check is an estimate", (rows[0]["yield_max"], rows[0]["expected_yield"]), (188, 214))
 rows = email("YIELD: SE Iowa beans", "SE Iowa beans 120 acres 60 bpa. Irrigated. 80 acres 55 bpa.")
 check("a region of one state ('SE Iowa') before the fields is one place: a report per field",
       [r["yield_bpa"] for r in rows], [60, 55])
@@ -156,12 +156,12 @@ for label, body, crop, want in (
           [r["yield_bpa"] for r in email(f"YIELD: Polk Co IA {crop}", body)], want)
 rows = email("YIELD: Polk Co IA beans", "Polk Co, IA: 58 bpa - two years ago this field made 66 bpa.")
 check("'two years ago' is the prior year of a like field (rotation)",
-      [(r["yield_bpa"], r["ly_yield"]) for r in rows], [(63, 72)])
+      [(r["yield_bpa"], r["ly_yield"]) for r in rows], [(58, 66)])
 for label, body, want in (
         ("a normal isn't a yield", "Polk Co, IA: 150 bu for the farm, normal is 210 bu.", ([150], [], [210])),
         ("nor a ten-year average", "Polk Co, IA: 86 bpa. Ten-year avg is 66 bpa", ([86], [], [66])),
         ("nor a record on the books", "Polk Co, IA: 58 bu/acre, the record for that field is 66 bu.",
-         ([62], [], [])),
+         ([58], [], [])),
         ("nor a change", "Polk Co, IA: 70 acres went 219 bpa. -15bpa from last season.", ([219], [], [])),
         ("nor a thousands group", "Polk Co, IA: 640 acres - 38,250 bushels for 59.8bpa average.",
          ([59.8], [], [])),
@@ -209,8 +209,8 @@ rows = email("YIELD: Vermilion Co IL corn (EC IL)",
              "Southern Vermilion County (EC IL) - 30 acres of downed corn harvested. "
              "Yield about 168 bpa dry.\nHoping for better.")
 check("split at county openers", [(r["location"], r["yield_bpa"]) for r in rows],
-      [("Northern Vermilion County", 262), ("Southern Vermilion County", 171)])
-check("'271 bpa in 2024' is last year", rows[0]["ly_yield"], 271)
+      [("Northern Vermilion County", 257), ("Southern Vermilion County", 168)])
+check("'266 bpa in 2024' is last year", rows[0]["ly_yield"], 266)
 
 rows = email("YIELD: Regional OH corn and silage",
              "Southwest Ohio first 40 acres of corn went 212 vs. 236 last year.\n"
@@ -241,7 +241,7 @@ check("'Place, ST' subject", (rows[0]["location"], rows[0]["state"], rows[0]["yi
 rows = email("YIELD: Western McDonough Co IL (W IL)",
              "First field went 221 bpa. Beat what we expected. 243 bpa last year.")
 check("Mc-name county in the subject",
-      (rows[0]["location"], rows[0]["yield_bpa"], rows[0]["ly_yield"]), ("Western McDonough Co", 226, 247))
+      (rows[0]["location"], rows[0]["yield_bpa"], rows[0]["ly_yield"]), ("Western McDonough Co", 221, 243))
 
 rows = email("YIELD: Lee Co GA (SW GA)",
              "Lee Co, GA\nCorn: Whole farm made 211 bu/acre. This was down 9 bushels from last year.")
@@ -276,12 +276,12 @@ check("'silage estimate 218'", yields("Silage estimate 218 this year.")[0], [218
 check("'248 A lot' — an 'A' before a word isn't acres",
       P.extract_yields("Linn Co, IA 248 A lot of fields like it.")[0], [248])
 check("a 'last year' that opens its own clause belongs to the next figure",
-      yields("Silage estimate 226, fwiw last year our silage estimate was 233.")[:2], ([231], [238]))
+      yields("Silage estimate 226, fwiw last year our silage estimate was 233.")[:2], ([226], [233]))
 check("...also after a unit", yields("Made 68 bpa, last year was 73 on that farm.")[0], [68])
 check("'better than expected 140 bpa' — 140 is the yield",
       yields("Beans better than expected 140 bpa.")[0], [140])
 check("'vs.69 bpa last year' (no space after the stop) is still last year",
-      yields("A field made 46 bpa, vs.69 bpa last year.")[:2], ([43], [73]))
+      yields("A field made 46 bpa, vs.69 bpa last year.")[:2], ([46], [69]))
 check("'expected 214bpa' alone is still the expectation",
       yields("Yield 52 bpa expected 214bpa after hail.")[::2], ([52], [214]))
 
@@ -339,9 +339,9 @@ def stored(**kw):
 
 
 archive = pd.DataFrame([
-    stored(location="Northern Vermilion County", yield_bpa=262.0,
+    stored(location="Northern Vermilion County", yield_bpa=257.0,
            raw_text="Our first corn field went 257 bpa, vs 266 bpa in 2024, the record year."),
-    stored(location="Knox Co", yield_bpa=228.0,
+    stored(location="Knox Co", yield_bpa=224.0,
            raw_text="Knox Co, IL: Running 224-234 bpa, still wet, over 20% moisture. "
                     "At least 10% under last year."),
     stored(state="IA", location="Howard Co",
@@ -359,8 +359,8 @@ def matched(subject, body, want):
     check(f"match {subject!r}", got, want)
 
 
-matched("YIELD: Vermilion Co IL corn", "Vermilion Co, IL: 271 bpa on the farm.", None)  # a LY figure there
-matched("YIELD: IL corn", "Knox Co IL(western IL) – 1/2 done on corn w 238 avg so far. "
+matched("YIELD: Vermilion Co IL corn", "Vermilion Co, IL: 266 bpa on the farm.", None)  # a LY figure there
+matched("YIELD: IL corn", "Knox Co IL(western IL) – 1/2 done on corn w 234 avg so far. "
         "110-115 day corn planted May 5-10.", None)                                     # different yield
 matched("YIELD: NC IA silage numbers", "Howard Co IA 215", "Howard Co")  # quoted in a no-yield row
 matched("YIELD: Chatham, IL soybeans", "60 acres, 91 bu/acre\n60 acres, 83 bu/acre, both records by 8%.",
@@ -417,8 +417,8 @@ rows = email("YIELD: Various IA locations",
              "Linn Co IA - 224 bpa corn vs a like field 258 in 2024")
 check("over 100 bpa with no crop named is corn (and says so); 62 bpa is left for a person",
       [(r["location"], r["crop"], r["yield_bpa"], bool(r.get("notes"))) for r in rows],
-      [("Adams Co", "Corn", 226, True), ("Clark Co", None, 62, False),
-       ("Linn Co", "Corn", 231, False)])
+      [("Adams Co", "Corn", 219, True), ("Clark Co", None, 62, False),
+       ("Linn Co", "Corn", 224, False)])
 check("a conversation with the source isn't a report", P.is_report_subject("RE: Yields Sharing"), False)
 check("a correction is", P.is_report_subject("CORRECTION: YIELD: Nebraska corn"), True)
 check("a forward whose header can't be read is left alone",

@@ -265,7 +265,7 @@ _EXP_POST = re.compile(
     r"^[^\w.]{0,3}(expect\w*|estimat\w*|target\w*|budget\w*|trend\w*|"      # not past a full stop
     r"(?:\d+|five|ten)[- ]?year\s+(?:avg|average))\b"           # "230bpa 10-year average"
     r"(?!\W{0,3}\d{2,3}(?:\.\d+)?(?!\d)(?!\.\d)(?!\s*%))", re.I)
-# What the farmer thought it would make is an expectation too: "Producer a bit
+# What the farmer thought it would make is an expectation too: "The grower was
 # surprised, thought it was 215" (the verb is optional here because a bare
 # "was 215" match starts at "was"; the context before it ends at "thought it").
 _THOUGHT = (r"(?:thought|figured|guessed)(?:\s+(?:it|they|we|he|she))?"
@@ -297,8 +297,8 @@ _PAST_RECORD = re.compile(
 # yield; so is "better than we thought 140 bpa".
 _EXP_DONE = re.compile(r"\b(?:than|as)\s+(?:expected|(?:\w+\s+)?thought)\W{0,3}$", re.I)
 # A "last year" right after a figure that opens its own clause belongs to the next
-# figure: in "estimate 226, fwiw last year our silage estimate was 233", 238 is last
-# year's and 231 this year's; likewise "made 68, last year was 73".
+# figure: in "estimate 226, fwiw last year our silage estimate was 233", 233 is last
+# year's and 226 this year's; likewise "made 68, last year was 73".
 _LY_LEADS = re.compile(r"^[^\d.;]{0,30}?\b(?:was|were|at|of|made|did|went)\s+\d{2,3}", re.I)
 # "less/more than" marks a difference at any size ("40 to 60 bushel less than
 # last year"), unlike "better than", which also follows real yields.
