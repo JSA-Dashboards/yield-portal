@@ -204,7 +204,10 @@ def run(df: pd.DataFrame, decisions: dict) -> pd.DataFrame:
                      out["raw_text"].astype(str)))
     siblings = {}
     for i, k in enumerate(ident):
-        if not gone[i]:
+        # an excluded entry is still one of the report's rows (out of averages, not
+        # missing); counting only live ones re-flagged a split report's other entries
+        # for ever once one was excluded (2026-10-21)
+        if decided[i].get("decision") != "superseded":
             siblings.setdefault(k, []).append(out["dedup_hash"].iloc[i])
     records = out.to_dict("records")
     by_hash = {r["dedup_hash"]: r for r in records}

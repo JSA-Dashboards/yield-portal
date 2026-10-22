@@ -188,6 +188,11 @@ check("...and lists its rows, so the fix keeps the one that's an entry already",
 check("...whose hash the fix makes again", kids[2]["dedup_hash"] in
       {k["dedup_hash"] for k in checks.entry_rows(oo.iloc[1].to_dict())}, True)
 check("...and leaves its figures alone when they agree", oo.loc[0, "suggestion"]["updates"], {})
+split3 = pd.DataFrame(kids)                                   # all three fields stored
+ex = checks.run(split3, {kids[2]["dedup_hash"]: {"decision": "excluded", "flags": "range"}})
+check("one field excluded: the others aren't asked to split again (2026-10-21)",
+      ex["review_flags"].tolist()[:2], [[], []])
+check("...and the excluded one stays out", ex.loc[2, "status"], "excluded")
 stale = [dict(old_halves[0], aph=57.0), old_halves[1]]      # split with the report's first APH
 so = checks.run(pd.DataFrame(stale), {})
 check("a kept entry read with another entry's APH takes its own",
