@@ -96,7 +96,7 @@ came in by, and never changes a report — it raises flags:
 | flag | rule | suggested fix |
 |---|---|---|
 | `incomplete` | no crop or no state (an email nobody could place) | crop → Corn when the state is known and the yield is over 100 bpa (new emails get that at parse time); else set by hand |
-| `split` | yields for both corn and soybeans in one report (`parse_pdfs.split_by_crop`) | one report per crop; the original is marked `superseded` |
+| `split` | yields for both corn and soybeans in one report (`parse_pdfs.split_by_crop`), also when it was stored crop-less (an email whose subject names both crops; state needed) | one report per crop; the original is marked `superseded` |
 | `entries` | yields for several fields or both practices (`split_entries`) in a report that hasn't become that many live rows yet | one report per entry (`checks.entry_rows`); a stored row that already is an entry is kept, the report's other rows `superseded`; in the bulk fix |
 | `range` | corn outside 50–300 bpa, soybeans under 10 | — |
 | `corn?` | soybeans over 100 bpa (corn filed under the soybean header) | crop → Corn |
@@ -178,7 +178,12 @@ five-field report (Kolten, 2026-10-06). The fix keeps a stored
 row that already is an entry and gives it its entry's figures when the yields agree
 (`checks.entry_changes`, the suggestion's `updates`: an irrigated half split on
 2026-10-05 had the report's first APH, not its own). Entry hashes use None for a blank field,
-as the parser does (`dedup_hash` puts "None" in the key; pandas has NaN). A split
+as the parser does (`dedup_hash` puts "None" in the key; pandas has NaN). An
+excluded entry still counts as one of its report's rows (only `superseded` ones
+don't): counting only live rows re-flagged a split report's other entries for good
+once one of them was excluded (fixed 2026-10-21). Known gap: acres after
+the figure ("231 bpa on 80 acres. … 199 bpa on 110 acres") cut the entries in the
+wrong place, so check an entries fix on such a report by eye. A split
 supersedes the report's row, and with it any decision a person made on it: the new
 entries can raise the same flag again (a "kept: not the same report" duplicate, an
 approved range). Carry those decisions to the entries (the 2026-10-06 batch carried
