@@ -36,9 +36,15 @@ UA = {"User-Agent": "Mozilla/5.0 (JSA variety-trial watcher)"}
 
 # (label, kind, url, pattern): kind "page" = the url's HTML matches pattern; kind
 # "file" = the url (with {Y}) returns a non-HTML file.
-# Programs that stopped posting at their source (checked 2026-10-22): still watched in
-# case they come back, but shown as "last posted N" rather than "source moved".
-ENDED = {"Nebraska corn": 2023, "Nebraska soybeans": 2023, "Wisconsin corn": 2023,
+# Programs that stopped (checked 2026-10-22): still watched in case they come back, but
+# shown as "last posted N" rather than "source moved".
+#   Nebraska: UNL's entry form no longer offers corn or soybeans (wheat, sorghum, pea,
+#     dry bean, millet...); the archives are marked historical. The 2024-25 files under
+#     files/media/file/ are wheat. Soybeans last ran in 2016.
+#   Michigan corn: MSU lists its corn hybrid test as discontinued in 2023. The "2023
+#     Michigan Corn Trials" on michcrop.com is a FIRST Seed Tests reprint, whose terms
+#     bar this use.
+ENDED = {"Nebraska corn": 2023, "Nebraska soybeans": 2016, "Wisconsin corn": 2023,
          "Michigan corn": 2022}
 SOURCES = [
     ("Illinois corn", "page", "https://vt.cropsci.illinois.edu/corn/",
