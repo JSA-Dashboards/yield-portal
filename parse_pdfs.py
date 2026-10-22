@@ -593,6 +593,24 @@ _PRACTICE_RE = re.compile(
 _ACRES_RE = re.compile(
     r"(?<![\d.,])\d{1,3}(?:,\d{3})*(?:\.\d+)?"
     r"(?:\s*(?:acres?|ac)\b|\s+[a-z]+\s+acres?\b|a\b|\s+a\b(?!\s+[a-z]))", re.I)
+# An acreage after its figure belongs to that figure's field: "Corn: 231 bpa on 80
+# acres. ... Corn: 199 bpa on 110 acres" (2026-10-21). The cut goes before the figure,
+# not at the acreage, which split each yield from its own acres.
+_FIGURE_ON_ACRES = re.compile(
+    r"(?<![\d.,/$])(\d{2,3}(?:\.\d+)?)\s*(?:bpa|bu(?:shels?)?|bushels?)?(?:\s*/\s*a(?:c(?:re)?)?)?"
+    r"\s*(?:on|across|over|from|off|for)\s+"
+    r"(?:the\s+(?:other\s+)?|another\s+|about\s+|around\s+|roughly\s+|nearly\s+)?$", re.I)
+
+
+def _trailing_acres_cut(text, at):
+    """For an acreage after its figure ("231 bpa on 80 acres"), where that field's
+    entry starts: the clause holding the figure, never reaching back past the number
+    before it. None for an acreage that opens its entry ("40 acres made 230")."""
+    m = _FIGURE_ON_ACRES.search(text, max(0, at - 40), at)
+    if not m or not 20 <= float(m.group(1)) <= 350:
+        return None
+    prev = [d.end() for d in re.finditer(r"\d", text[:m.start(1)])]
+    return _clause_start(text, m.start(1), prev[-1] if prev else 0)
 
 # --- fields named without acres (Kolten, 2026-10-07: "make this each an entry") -------
 _FIELD_WORDS = r"(?:fields?|farms?|quarters?|pieces?)"
@@ -703,8 +721,14 @@ def split_entries(text):
     text = _unitize(text or "")
     if FARM_AVG_RE.search(text) or _PART_OF_AVG.search(text):
         return None
-    # last year's field is a remark, not an entry (_ly_field)
-    cuts = {m.start(): None for m in _ACRES_RE.finditer(text) if not _ly_field(text, m.start())}
+    # last year's field is a remark, not an entry (_ly_field); an acreage after its
+    # figure is that figure's field, cut before the figure (_trailing_acres_cut)
+    cuts = {}
+    for m in _ACRES_RE.finditer(text):
+        if _ly_field(text, m.start()):
+            continue
+        at = _trailing_acres_cut(text, m.start())
+        cuts.setdefault(m.start() if at is None else at, None)
     continues = set()
     for m in _DESIGNATOR.finditer(text):
         cuts.setdefault(m.start(), None)

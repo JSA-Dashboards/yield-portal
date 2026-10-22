@@ -88,6 +88,22 @@ check("several fields: a report each, with its own APH",
       [(231, 220, False), (248, 230, True), (196, None, False)])
 check("...one text, three hashes", (len({r["raw_text"] for r in rows}),
                                     len({r["dedup_hash"] for r in rows})), (1, 3))
+# acres after the figure belong to that figure's field (2026-10-21: the cut fell at the
+# acreage, which gave each yield the next field's acres)
+rows = email("YIELD: Polk Co IA corn",
+             "Polk Co, IA Corn: 231 bpa on 80 acres with 220 APH. Late planted. Corn: 199 bpa on "
+             "110 acres. Corn: 244 bpa on 45 acres.")
+check("acres after the yield: a report per field, each with its own APH",
+      [(r["yield_bpa"], r["aph"]) for r in rows], [(231, 220), (199, None), (244, None)])
+rows = email("YIELD: Polk Co IA corn",
+             "Polk Co, IA Corn: 224 bpa on 30 acres. 20 bushels under last year Corn: 246 bpa on "
+             "65 acres.")
+check("...the field after a 'last year' clause keeps its own yield",
+      [(r["yield_bpa"], r["ly_yield"]) for r in rows], [(224, None), (246, None)])
+rows = email("YIELD: Polk Co IA corn", "Polk Co, IA: 231 bpa on 80 acres, happy with it.")
+check("...one field with its acres after it stays one report", [r["yield_bpa"] for r in rows], [231])
+rows = email("YIELD: Polk Co IA corn", "Polk Co, IA: planted 4/23 on 150 acres, made 231 bpa.")
+check("...a date before 'on N acres' isn't a yield", [r["yield_bpa"] for r in rows], [231])
 rows = email("YIELD: Polk Co IA corn", "Polk Co, IA: Irrigated 40 acres 232 bpa, 80 acres 241 bpa.")
 check("fields under one practice all take it", [r["irrigation"] for r in rows],
       ["Irrigated", "Irrigated"])

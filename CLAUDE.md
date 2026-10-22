@@ -181,9 +181,10 @@ row that already is an entry and gives it its entry's figures when the yields ag
 as the parser does (`dedup_hash` puts "None" in the key; pandas has NaN). An
 excluded entry still counts as one of its report's rows (only `superseded` ones
 don't): counting only live rows re-flagged a split report's other entries for good
-once one of them was excluded (fixed 2026-10-21). Known gap: acres after
-the figure ("231 bpa on 80 acres. … 199 bpa on 110 acres") cut the entries in the
-wrong place, so check an entries fix on such a report by eye. A split
+once one of them was excluded (fixed 2026-10-21). Acres after the figure belong to
+that figure's field ("Corn: 231 bpa on 80 acres. … Corn: 199 bpa on 110 acres",
+`_trailing_acres_cut`, 2026-10-21): the cut goes before the figure, not at the
+acreage. A split
 supersedes the report's row, and with it any decision a person made on it: the new
 entries can raise the same flag again (a "kept: not the same report" duplicate, an
 approved range). Carry those decisions to the entries (the 2026-10-06 batch carried
