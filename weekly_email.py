@@ -208,25 +208,7 @@ def state_chart(f, crop, year, prev, years_all):
             .properties(title=f"{crop}: average by state, {year} vs {prev}"))
 
 
-THIN = 3        # under 3 reports in a year: the portal's "Too few" (analysis.tier)
-
-
-def state_changes(g, year, prev, states):
-    """The column beside the state bars: each state's average this year against its
-    average last year, '+4.2%' / '−3.1%', green up / red down, gray when either year
-    has fewer than THIN reports (a swing that thin shouldn't catch the eye), '—' when
-    either year has none."""
-    k = g.set_index(["state", "crop_year"])
-    rows = []
-    for s in states:
-        if (s, year) not in k.index or (s, prev) not in k.index or not k.at[(s, prev), "avg"]:
-            rows.append({"state": s, "label": "—", "tone": "flat"})
-            continue
-        pct = (k.at[(s, year), "avg"] / k.at[(s, prev), "avg"] - 1) * 100
-        thin = min(k.at[(s, year), "n"], k.at[(s, prev), "n"]) < THIN
-        rows.append({"state": s, "label": _signed(pct, "%"),
-                     "tone": "flat" if thin or abs(pct) < 0.05 else ("up" if pct > 0 else "down")})
-    return pd.DataFrame(rows, columns=["state", "label", "tone"])
+state_changes = data.state_changes     # shared with Explore's By-state bars
 
 
 # --- HTML pieces (tables and inline styles: Outlook renders with Word) ----------------
@@ -366,7 +348,7 @@ def build(today: dt.date):
     footer = ("Averages are of the reports themselves, not county or state estimates, and count "
               f"reviewed reports only (silage left out of corn). State chart: each state's {year} "
               "report count in parentheses and, beside its bars, its average against last year's, "
-              f"in gray where either year has fewer than {THIN} reports. Report text holds every "
+              f"in gray where either year has fewer than {data.THIN} reports. Report text holds every "
               "report of the season.")
     if portal:
         footer += f' <a href="{e(portal)}" style="color:{BLUE}">Open the Yield Portal</a>.'

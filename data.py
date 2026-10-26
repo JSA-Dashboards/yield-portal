@@ -146,6 +146,29 @@ def year_scale(years_all):
     return alt.Scale(domain=ys, range=colors)
 
 
+CHANGE_TONES = {"up": "#15803d", "down": "#b91c1c", "flat": "#6b7280"}
+THIN = 3        # under 3 reports in a year: the portal's "Too few" (analysis.tier)
+
+
+def state_changes(g, year, prev, states):
+    """The column beside the state bars (Explore and the weekly email): each state's
+    average this year against its average in `prev`, '+4.2%' / '−3.1%', tone up / down,
+    'flat' (gray) when either year has fewer than THIN reports (a swing that thin
+    shouldn't catch the eye), '—' when either year has none. `g` has state, crop_year,
+    avg and n."""
+    k = g.set_index(["state", "crop_year"])
+    rows = []
+    for s in states:
+        if (s, year) not in k.index or (s, prev) not in k.index or not k.at[(s, prev), "avg"]:
+            rows.append({"state": s, "label": "—", "tone": "flat"})
+            continue
+        pct = (k.at[(s, year), "avg"] / k.at[(s, prev), "avg"] - 1) * 100
+        thin = min(k.at[(s, year), "n"], k.at[(s, prev), "n"]) < THIN
+        rows.append({"state": s, "label": f"{pct:+.1f}%".replace("-", "−"),
+                     "tone": "flat" if thin or abs(pct) < 0.05 else ("up" if pct > 0 else "down")})
+    return pd.DataFrame(rows, columns=["state", "label", "tone"])
+
+
 def has_tag(series: pd.Series, tag: str) -> pd.Series:
     return series.fillna("").str.split(", ").map(lambda tags: tag in tags)
 

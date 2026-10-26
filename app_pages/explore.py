@@ -183,7 +183,6 @@ with right, st.container(border=True):
         ).transform_filter("isValid(datum.avg)")
         st.altair_chart(alt.layer(base, layer).project("albersUsa").properties(height=290))
     elif view == "Bars":
-        st.caption(f"Average reported yield; (n) = reports in {latest}")
         # each state's report count this season beside its name, as in the weekly email,
         # most first; states with none this season after, by their reports in all years
         n_now = by_state[by_state["crop_year"] == latest].set_index("state")["n"]
@@ -191,16 +190,39 @@ with right, st.container(border=True):
         order = sorted(total.index, key=lambda s: (-n_now.get(s, 0), -total[s], s))
         rows = {s: f"{s} ({int(n_now.get(s, 0))})" for s in order}
         bars = by_state.assign(row=by_state["state"].map(rows))
-        st.altair_chart(alt.Chart(bars).mark_bar(**BAR).encode(
-            y=alt.Y("row:N", sort=[rows[s] for s in order], title=None, scale=CATEGORY_GAP),
-            x=alt.X("avg:Q", title="Avg reported yield (bpa)"),
+        sort = [rows[s] for s in order]
+        earlier = [y for y in years if y < latest]
+        st.caption(f"Average reported yield; (n) = reports in {latest}"
+                   + (f"; % = {latest} vs {max(earlier)}" if earlier else ""))
+        # room at the right end of the axis for the change column (drawn in the chart,
+        # not beside it: a concatenated chart can't stretch to the card)
+        right = float(bars["avg"].max()) * (1.2 if earlier else 1.0)
+        chart = alt.Chart(bars).mark_bar(**BAR).encode(
+            y=alt.Y("row:N", sort=sort, title=None, scale=CATEGORY_GAP),
+            x=alt.X("avg:Q", title="Avg reported yield (bpa)",
+                    scale=alt.Scale(domain=[0, right], nice=False)),
             color=YEAR_COLOR,
             yOffset=alt.YOffset("crop_year:N", sort="descending", scale=GROUP_GAP),
             tooltip=[alt.Tooltip("state:N", title="State"),
                      alt.Tooltip("crop_year:N", title="Year"),
                      alt.Tooltip("avg:Q", title="Avg bpa", format=".1f"),
                      alt.Tooltip("n:Q", title="Reports")],
-        ).properties(height=max(300, 44 * len(order))))
+        )
+        if earlier:
+            # each state's change against the season before, right of its bars as in the
+            # weekly email: green up / red down, gray when a year has under 3 reports
+            prev = max(earlier)
+            chg = data.state_changes(by_state, latest, prev, order).assign(
+                row=lambda d: d["state"].map(rows), x=right)
+            col = alt.Chart(chg).mark_text(align="right", baseline="middle", fontSize=12).encode(
+                y=alt.Y("row:N", sort=sort, title=None, scale=CATEGORY_GAP),
+                x=alt.X("x:Q"),
+                text="label:N",
+                color=alt.Color("tone:N", legend=None, scale=alt.Scale(
+                    domain=list(data.CHANGE_TONES), range=list(data.CHANGE_TONES.values()))),
+            )
+            chart = alt.layer(chart, col).resolve_scale(color="independent")
+        st.altair_chart(chart.properties(height=max(300, 44 * len(order))))
     else:
         tbl, cfg = _year_table(by_state[["state", "crop_year", "avg"]], "avg", "%.1f")
         tbl["Reports"] = tbl["state"].map(by_state.groupby("state")["n"].sum())
