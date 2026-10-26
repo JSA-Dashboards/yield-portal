@@ -184,9 +184,11 @@ with right, st.container(border=True):
         st.altair_chart(alt.layer(base, layer).project("albersUsa").properties(height=290))
     elif view == "Bars":
         st.caption(f"Average reported yield; (n) = reports in {latest}")
-        order = by_state.groupby("state")["n"].sum().sort_values(ascending=False).index.tolist()
-        # each state's report count this season beside its name, as in the weekly email
+        # each state's report count this season beside its name, as in the weekly email,
+        # most first; states with none this season after, by their reports in all years
         n_now = by_state[by_state["crop_year"] == latest].set_index("state")["n"]
+        total = by_state.groupby("state")["n"].sum()
+        order = sorted(total.index, key=lambda s: (-n_now.get(s, 0), -total[s], s))
         rows = {s: f"{s} ({int(n_now.get(s, 0))})" for s in order}
         bars = by_state.assign(row=by_state["state"].map(rows))
         st.altair_chart(alt.Chart(bars).mark_bar(**BAR).encode(
