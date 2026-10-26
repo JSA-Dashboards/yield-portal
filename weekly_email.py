@@ -161,8 +161,11 @@ def state_chart(f, crop, year, prev, years_all):
     y = f[f["crop_year"].isin([year, prev])].dropna(subset=["yield_bpa"])
     g = (y.groupby(["state", "crop_year"])
          .agg(avg=("yield_bpa", "mean"), n=("yield_bpa", "size")).reset_index())
-    top = (g[g["crop_year"] == year].sort_values(["n", "state"], ascending=[False, True])
-           ["state"].head(10).tolist())
+    # most reports this season first; a tie goes to the state with more reports in all
+    # years, then by name, as on Explore's By-state bars
+    total = f.dropna(subset=["yield_bpa"]).groupby("state").size()
+    now = g[g["crop_year"] == year].set_index("state")["n"]
+    top = sorted(now.index, key=lambda s: (-now[s], -total.get(s, 0), s))[:10]
     g = g[g["state"].isin(top)].copy()
     g["crop_year"] = g["crop_year"].astype(int)
     # each state's report count this season beside its name: how much its bar rests on
