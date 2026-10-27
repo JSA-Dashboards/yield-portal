@@ -156,9 +156,10 @@ span.d { color: #6b7280; }
 
 
 def report_html(df: pd.DataFrame, title: str, subtitle: str, new_since=None) -> str:
-    """The PDF's HTML; a report dated on or after `new_since` on yellow."""
+    """The PDF's HTML; a report dated on or after `new_since` on yellow. No title when
+    `title` is empty (the text after the summary, which carries the title)."""
     e = html.escape
-    out = [f"<h1>{e(title)}</h1>", f"<p class='sub'>{e(subtitle)}</p>"]
+    out = [f"<h1>{e(title)}</h1>", f"<p class='sub'>{e(subtitle)}</p>"] if title else []
     for crop, states in sections(df):
         out.append(f"<h2>{e(crop)}</h2>")
         for name, rows in states:
@@ -178,21 +179,38 @@ def report_html(df: pd.DataFrame, title: str, subtitle: str, new_since=None) -> 
     return "".join(out)
 
 
-def to_pdf(df: pd.DataFrame, title: str, subtitle: str, new_since=None) -> bytes:
+def to_pdf(df: pd.DataFrame, title: str, subtitle: str, new_since=None,
+           summary=None) -> bytes:
     """Letter pages, same layout as the page, numbered; reports dated on or after
-    `new_since` on yellow."""
+    `new_since` on yellow. `summary` = (html with cid: images, {cid: png bytes}) from
+    summary.pdf_summary puts the weekly email's summary on top."""
     import fitz
-    story = fitz.Story(html=report_html(df, title, subtitle, new_since), user_css=_PDF_CSS)
+    if summary:
+        # the summary first, then the text from a fresh page: two stories, because
+        # MuPDF's page-break-before sends this layout round in a loop
+        top, images = summary
+        archive = fitz.Archive()
+        for cid, png in images.items():
+            archive.add((png, f"{cid}.png"))
+            top = top.replace(f"cid:{cid}", f"{cid}.png")
+        e = html.escape
+        stories = [fitz.Story(html=f"<h1>{e(title)}</h1><p class='sub'>{e(subtitle)}</p>{top}",
+                              user_css=_PDF_CSS, archive=archive),
+                   fitz.Story(html="<h1>Report text</h1>" + report_html(df, "", "", new_since),
+                              user_css=_PDF_CSS)]
+    else:
+        stories = [fitz.Story(html=report_html(df, title, subtitle, new_since), user_css=_PDF_CSS)]
     buf = io.BytesIO()
     writer = fitz.DocumentWriter(buf)
     page = fitz.paper_rect("letter")
     frame = page + (54, 50, -54, -58)
-    more = True
-    while more:
-        dev = writer.begin_page(page)
-        more, _ = story.place(frame)
-        story.draw(dev)
-        writer.end_page()
+    for story in stories:
+        more = True
+        while more:
+            dev = writer.begin_page(page)
+            more, _ = story.place(frame)
+            story.draw(dev)
+            writer.end_page()
     writer.close()
     doc = fitz.open("pdf", buf.getvalue())
     gray = (0.42, 0.45, 0.5)

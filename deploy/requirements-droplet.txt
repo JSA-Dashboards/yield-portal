@@ -1,4 +1,3 @@
-# The Droplet's jobs: the app's requirements plus the chart renderer the weekly
-# email uses (Altair -> PNG). Streamlit Cloud doesn't need it.
+# The Droplet's jobs: the app's requirements (which now include the chart renderer,
+# vl-convert-python: Report text's PDF draws the email's charts too).
 -r ../requirements.txt
-vl-convert-python

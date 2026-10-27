@@ -111,6 +111,15 @@ with st.container(horizontal=True, horizontal_alignment="distribute",
     if not VIEW_ONLY:
         title, subtitle = f"Yield reports · {year}", _subtitle()
         stem = f"yield_reports_{year}" + (f"_{crops[0].lower()}" if len(crops) == 1 else "")
+
+        def _pdf():
+            """The weekly email's summary (tiles and charts for this year, these crops and
+            states; new = the yellow reports), then the report text."""
+            import summary as S
+            base = df[df["state"].isin(states)] if states else df
+            new = f[f["date_reported"].map(lambda d: RT.is_new(d, since))]
+            top = S.pdf_summary(base, year, [c for c in data.CROPS if c in crops], new, since)
+            return RT.to_pdf(f, title, subtitle, since, top)
         with st.container(horizontal=True, width="content"):
             # built only when clicked, from the reports shown here
             st.download_button(
@@ -118,7 +127,7 @@ with st.container(horizontal=True, horizontal_alignment="distribute",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 on_click="ignore", icon=":material/description:")
             st.download_button(
-                "PDF", data=lambda: RT.to_pdf(f, title, subtitle, since), file_name=f"{stem}.pdf",
+                "PDF", data=_pdf, file_name=f"{stem}.pdf",
                 mime="application/pdf", on_click="ignore", icon=":material/picture_as_pdf:")
 
 for crop, state_rows in RT.sections(f):

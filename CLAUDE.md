@@ -592,6 +592,18 @@ the week the last Tuesday email covered (`last_report_week`), so a download show
 what that email called new plus everything reported since. Undated reports never
 are. Until then only the email marked new reports; the downloads never had it.
 
+**The PDF opens with the weekly email's summary** (Kolten, 2026-10-27: "make them basically
+mirror each other"): the intro line, the yellow box of new reports, and per crop the five
+tiles and two charts, for the page's crop year, crops and states (dates and search only
+narrow the text); "new" is the page's "Highlight new since". Then the report text from a
+fresh page. One copy of those pieces, `summary.py`, builds both; the PDF scales the email's
+px sizes by 504/684 (its column on a letter page) so it is the email made smaller, not a
+second layout. Two PyMuPDF Story traps: an HTML table needs `style="width:100%"` (the
+`width` attribute alone collapses its cells), and `page-break-before` sends this layout
+round in a loop forever, so `to_pdf` lays out the summary and the text as two stories
+(`page-break-inside: avoid` keeps each crop's block on one page and is fine). The Word
+download is the text only. The charts need `vl-convert-python` (in requirements.txt).
+
 Report text is free text, so it is escaped for Markdown (`~10%` would strike
 through, `$395 … $255` would turn into math) and for HTML. Each state is a
 Markdown table, not `st.table`: `st.table` caps a Markdown cell at 400px, which
@@ -600,7 +612,8 @@ after changes.
 
 ## Weekly email
 
-`weekly_email.py` builds the Tuesday-morning email for the JSA group: for the
+`weekly_email.py` builds the Tuesday-morning email for the JSA group (its summary part,
+tiles, charts and the new box, is `summary.py`, shared with Report text's PDF): for the
 current crop year, per crop, Explore's headline tiles (`data.headline`, with %
 changes) and two charts (yields by crop year; average by state, this year vs last;
 Altair → PNG with `vl-convert-python`, embedded as `cid:` attachments). Kolten,

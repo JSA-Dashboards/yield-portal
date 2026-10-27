@@ -7,3 +7,4 @@ python-dotenv
 snowflake-connector-python
 cryptography
 msal
+vl-convert-python
