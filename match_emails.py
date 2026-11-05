@@ -6,8 +6,8 @@ Date the archive from the report emails, in bulk.
     pythonw match_emails.py --target snowflake --auto # the scheduled task (no console)
     python match_emails.py --target snowflake --source graph [--auto]   # no Outlook: the droplet
 
-Reads every Ag Trader Talk yield email, from Outlook's cache over COM (Inbox,
-Deleted Items, Archive) or, with --source graph, from the whole mailbox on the
+Reads every Ag Trader Talk yield email, from Outlook's cache over COM (every mail
+folder) or, with --source graph, from the whole mailbox on the
 server through Microsoft Graph (graph_mail.py; needs the Mail.Read permission).
 It parses each one exactly like the Add reports page, and for each report in it:
   date    archive has it, undated or dated later -> stamp this email's date,
@@ -83,7 +83,24 @@ SENDER = ('@SQL="http://schemas.microsoft.com/mapi/proptag/0x5D01001F" '
 # prefix or substring) and kept only when unwrap_forward finds the original header.
 FORWARDED = '@SQL="urn:schemas:httpmail:subject" LIKE \'%YIELD:%\''
 MESSAGE_ID = "http://schemas.microsoft.com/mapi/proptag/0x1035001F"
-FOLDERS = ["Inbox", "Deleted Items", "Archive"]
+SKIP = {"Sync Issues", "Conversation History", "RSS Feeds", "Outbox", "Drafts"}
+
+
+def _mail_folders(root, path=""):
+    """Every mail folder in the store, subfolders included -> [(path, folder)]: a mail
+    rule can file the source's emails anywhere (Kolten's sends them to "Yields
+    (Toay)" since 2026-11), so no fixed list of folders."""
+    out = []
+    for f in root.Folders:
+        try:
+            if f.Name in SKIP or f.DefaultItemType != 0:        # 0 = mail items
+                continue
+        except Exception:
+            continue
+        p = f"{path}/{f.Name}" if path else f.Name
+        out.append((p, f))
+        out += _mail_folders(f, p)
+    return out
 
 
 def _original(e):
@@ -131,9 +148,9 @@ def _let_cache_catch_up(root, quiet=45, limit=240):
     (at most `limit`)."""
     def counts():
         out = []
-        for name in FOLDERS:
+        for _, f in _mail_folders(root):
             try:
-                out.append(root.Folders[name].Items.Count)
+                out.append(f.Items.Count)
             except Exception:
                 out.append(None)
         return out
@@ -155,10 +172,10 @@ def read_emails(catch_up=False):
     if started_here:
         _let_cache_catch_up(root)
     out = {}
-    for name in FOLDERS:
+    for name, folder in _mail_folders(root):
         for flt in (SENDER, FORWARDED):
             try:
-                items = root.Folders[name].Items.Restrict(flt)
+                items = folder.Items.Restrict(flt)
             except Exception:
                 continue
             for m in items:
