@@ -22,6 +22,10 @@ gitignored, on Kolten's PC only. Read `CLAUDE.local.md` when it's there.
   (Kolten reads mail in the new Outlook). The Archive folder syncs after the
   Inbox and can lag months behind the server. Mail the cache can't reach yet:
   save it from Outlook's server search as `.msg` and pass it with `--msg`.
+  Every mail folder is searched, not a fixed list: since 2026-11 a rule files the
+  source's emails in **Bids (2) / Yields (Toay)**, and the old Inbox / Deleted Items /
+  Archive list would have missed every new one. A folder new to classic Outlook only
+  appears once its cache has synced the folder list.
   Skipped: emails without YIELD in the subject (a conversation with the source
   carries signatures, not reports). A colleague's forward ("FW: YIELD: ...") is
   read as the original: subject, report and send time come from the innermost
